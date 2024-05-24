@@ -38,26 +38,26 @@ Future<List<BasketballCourt>> getBasketballCourts() async {
   List<BasketballCourt> basketballCourts = [];
   for (var json in jsonList) {
     try {
-      // Cast json to Map<String, dynamic> to access its properties
+      //Cast json to Map<String, dynamic>
       Map<String, dynamic> jsonMap = json as Map<String, dynamic>;
 
-      // Parse lat and lon as doubles
+      //Parse as doubles
       double lat = double.parse(jsonMap['lat']);
       double lon = double.parse(jsonMap['lon']);
 
-      // Create a new Map with updated lat and lon values
+      //Create new obj
       Map<String, dynamic> updatedJson = {
         ...jsonMap,
         'lat': lat,
         'lon': lon,
       };
 
-      // Create a BasketballCourt object from the updated JSON map
+      //Add to list
       basketballCourts.add(BasketballCourt.fromJson(updatedJson));
     } catch (e) {
       print('Error parsing basketball court data: $e');
       continue;
-      // Handle the error here, such as logging it or skipping the invalid data
+      //Skips data with excessive NULL values
     }
   }
 
