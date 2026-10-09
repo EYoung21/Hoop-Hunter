@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.mypy_cache/
+
+# Caches and generated data (all reproducible from the commands in README.md)
+data/
+datasets/
+out/
+runs/
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Ultralytics local settings / fonts (YOLO_CONFIG_DIR is pointed here)
+.ultralytics/
+
+# Cloud runs: instance bookkeeping and logs (no secrets, but machine-specific)
+cloud/last_run.json
+cloud/*.tmp
+cloud/logs/
+*.osm.pbf
+*.geojsonseq

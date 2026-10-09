@@ -1,0 +1,23 @@
+# Hoop Hunter satellite court-detection pipeline
+# Install into the local venv:  .venv\Scripts\python -m pip install -r requirements.txt
+#
+# Geo / imagery
+numpy>=1.26
+requests>=2.31
+rasterio>=1.3.10        # Windows wheels on PyPI bundle GDAL; no separate GDAL install needed
+pyproj>=3.6
+shapely>=2.0
+pystac-client>=0.8
+planetary-computer>=1.0
+pillow>=10.0
+
+# Nationwide steps (osm_extract, naip_index, build_dataset_us, scan_state, evaluate).
+# osm_extract also needs osmium-tool on PATH (apt-get install osmium-tool); see cloud/requirements-cloud.txt
+pyarrow>=14
+pyshp>=2.3
+pyyaml>=6.0
+# orjson>=3.9           # optional: ~3x faster GeoJSONSeq parsing in osm_extract
+
+# Detection model (pulls in torch). On Windows the default PyPI torch wheel is
+# CPU-only; see README "GPU training" for the CUDA wheel.
+ultralytics>=8.3

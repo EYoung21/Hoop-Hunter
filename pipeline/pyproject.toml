@@ -1,0 +1,13 @@
+[project]
+name = "hoop-pipeline"
+version = "0.1.0"
+description = "Hoop Hunter: find unmapped basketball courts in NAIP aerial imagery"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+ignore = ["B905"]  # zip(strict=) is noise for fixed-length geometry tuples

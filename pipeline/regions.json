@@ -1,0 +1,23 @@
+{
+  "_comment": "Bounding boxes are [south, west, north, east] in WGS84 degrees. 'app_region' (optional) is the region label written to the app file for detections in that area (defaults to the region name). 'groups' name lists of regions usable anywhere a region name is accepted (e.g. --regions training).",
+  "regions": {
+    "chattanooga":      {"bbox": [34.98, -85.45, 35.26, -85.05], "role": "target", "label": "Chattanooga / Signal Mountain, TN"},
+    "hamilton_county":  {"bbox": [34.98, -85.48, 35.46, -84.94], "role": "target", "app_region": "chattanooga", "label": "Hamilton County, TN (whole county)"},
+    "downtown_chattanooga": {"bbox": [35.042, -85.312, 35.051, -85.301], "role": "target", "app_region": "chattanooga", "label": "Downtown Chattanooga test window (~1.0 km x 1.0 km)"},
+    "chattanooga_smoke": {"bbox": [35.0435, -85.2775, 35.0535, -85.2655], "role": "target", "app_region": "chattanooga", "label": "~1.2 km^2 test window east of downtown Chattanooga containing 3 OSM courts (exercises the known-court filter)"},
+
+    "atlanta":          {"bbox": [33.65, -84.55, 33.90, -84.25], "role": "train", "label": "Atlanta, GA"},
+    "nashville":        {"bbox": [36.05, -86.95, 36.25, -86.65], "role": "train", "label": "Nashville, TN"},
+    "knoxville":        {"bbox": [35.88, -84.05, 36.05, -83.85], "role": "train", "label": "Knoxville, TN"},
+    "birmingham":       {"bbox": [33.40, -86.95, 33.60, -86.70], "role": "train", "label": "Birmingham, AL"},
+    "charlotte":        {"bbox": [35.10, -80.95, 35.35, -80.70], "role": "train", "label": "Charlotte, NC"},
+    "houston":          {"bbox": [29.65, -95.55, 29.85, -95.25], "role": "train", "label": "Houston, TX"},
+    "phoenix":          {"bbox": [33.35, -112.15, 33.60, -111.85], "role": "train", "label": "Phoenix, AZ"},
+    "chicago_suburbs":  {"bbox": [41.75, -88.05, 42.10, -87.75], "role": "train", "label": "Chicago western/northern suburbs, IL"}
+  },
+  "groups": {
+    "target": ["chattanooga"],
+    "training": ["atlanta", "nashville", "knoxville", "birmingham", "charlotte", "houston", "phoenix", "chicago_suburbs"],
+    "southeast": ["atlanta", "nashville", "knoxville", "birmingham", "charlotte"]
+  }
+}
