@@ -257,7 +257,7 @@ def api_call(cfg: Config, method: str, path: str, payload: dict[str, Any] | None
     except OSError as e:
         log.error("cannot read key file %s: %s", cfg.key_file, e.strerror)
         return 0, None
-    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": "hoophunter-watchdog/1.0"}  # Lambda blocks the default Python-urllib agent (403)
     body = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
