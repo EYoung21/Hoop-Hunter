@@ -21,9 +21,12 @@ Outputs in ``--out-dir`` (default ``data/osm_us``):
     indoor_us.parquet     indoor-court layer: sports / fitness / community
                           centres and sports halls tagged basketball, plus
                           basketball pitches tagged indoor (column indoor_kind)
-    context_us.parquet    hard negatives + scan-mask features, one row per
-                          (feature, kind); kinds in osm_tags.MASK_KINDS /
-                          NEGATIVE_KINDS. Parking keeps only its center.
+    context_us.parquet    hard negatives, public sites (parks, schools, places
+                          of worship, ...), restricted sites (prisons, military)
+                          and residential context (landuse=residential,
+                          apartments), one row per (feature, kind); kinds in
+                          osm_tags. Columns include access and name. Parking
+                          keeps only its center.
     courts_<ST>.geojson   fetch_osm-compatible court file per --state-geojson
     summary.json          counts (total, by state, TN, indoor, context kinds)
 
@@ -91,7 +94,8 @@ try:  # orjson is ~3x faster for the big context layer; json works too
 except ImportError:  # pragma: no cover
     _loads = json.loads
 
-_KEYWORDS = (b"basketball", b'"leisure"', b'"amenity"', b'"landuse"', b'"residential"', b'"sport"')
+_KEYWORDS = (b"basketball", b'"leisure"', b'"amenity"', b'"landuse"', b'"residential"', b'"sport"', b'"building"',
+             b'"military"')
 
 
 # --------------------------------------------------------------------------- osmium
@@ -145,7 +149,8 @@ def _orig_ref(props: dict[str, Any]) -> tuple[str, int]:
 
 COURT_COLS = ["osm_type", "osm_id", "name", "leisure", "amenity", "sport", "tags", "center_lon", "center_lat",
               "area_m2", "geom_kind", "outdoor", "court_like", "indoor_kind", "wkb"]
-CONTEXT_COLS = ["kind", "osm_type", "osm_id", "sport", "center_lon", "center_lat", "area_m2", "geom_kind", "wkb"]
+CONTEXT_COLS = ["kind", "osm_type", "osm_id", "sport", "access", "name", "center_lon", "center_lat", "area_m2",
+                "geom_kind", "wkb"]
 
 
 def _parse_chunk(task: tuple[str, int, int, str, int]) -> dict[str, int]:
@@ -216,6 +221,8 @@ def _parse_chunk(task: tuple[str, int, int, str, int]) -> dict[str, int]:
                         ctx["osm_type"].append(osm_type)
                         ctx["osm_id"].append(osm_id)
                         ctx["sport"].append(tags.get("sport"))
+                        ctx["access"].append(tags.get("access"))
+                        ctx["name"].append(tags.get("name"))
                         ctx["center_lon"].append(rlon)
                         ctx["center_lat"].append(rlat)
                         ctx["area_m2"].append(area)
@@ -242,8 +249,8 @@ def _court_schema() -> pa.Schema:
 def _context_schema() -> pa.Schema:
     return pa.schema([
         ("kind", pa.string()), ("osm_type", pa.string()), ("osm_id", pa.int64()), ("sport", pa.string()),
-        ("center_lon", pa.float64()), ("center_lat", pa.float64()), ("area_m2", pa.float64()),
-        ("geom_kind", pa.string()), ("wkb", pa.binary()),
+        ("access", pa.string()), ("name", pa.string()), ("center_lon", pa.float64()), ("center_lat", pa.float64()),
+        ("area_m2", pa.float64()), ("geom_kind", pa.string()), ("wkb", pa.binary()),
     ])
 
 

@@ -11,12 +11,17 @@ Find every basketball court, including the ones that aren't on any map. Hoop Hun
 
 ## Status (October 2026)
 
-- **App:** runs in Expo Go. It has 1,975 courts: 828 mapped courts in Tennessee (28 of them in Chattanooga), 553 NYC Parks courts, and 594 satellite finds in Tennessee waiting for review.
-- **Detector:** trained on every mapped court in the lower 48 (about 94,000 usable labels from 101,098 OpenStreetMap courts) at 0.6 m per pixel. On Tennessee, which was held out of training, it scores mAP50 0.79.
+- **App:** runs in Expo Go. It has 1,306 courts:
+  - 622 mapped Tennessee courts that pass the privacy policy (home and residents-only courts removed)
+  - 553 NYC Parks courts
+  - 131 new satellite finds in Tennessee, each one at a park, school, church, rec center or college and checked by eye
+- **Detector:** trained on every mapped court in the lower 48 (about 94,000 usable labels from 101,098 OpenStreetMap courts) at 0.6 m per pixel. On Tennessee, which was held out of training, it scores mAP50 0.77.
+- **Scanner:** scanned every pixel of Tennessee (6.49 million tiles) in 11 minutes on 3 rented GPUs. A nationwide scan is estimated at about $75 and 4.7 hours on 8 GPUs.
+- **Safety:** every rented GPU machine shuts itself down at a deadline or after 30 idle minutes. See the watchdog section in [pipeline/README.md](pipeline/README.md).
 - **Next:**
-  - a nationwide scan
+  - the nationwide scan
   - a server database, so the app can load courts for the whole country by map area
-  - filtering out private home courts
+  - hand-labeled accuracy checks using the gold labeling tool
   - light social features
 
 ## Quick start

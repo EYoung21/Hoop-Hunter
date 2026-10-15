@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hoop Hunter Gold Labels</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #d9d9d4; --accent: #c2410c;
+    --pending: #facc15; --public: #16a34a; --home: #ea580c; --residents: #2563eb; --unsure: #e5e5e5; --rejected: #dc2626;
+    --sel: #ffffff; --kbd: #ececE8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413; --panel: #1f1f1d; --text: #ececea; --muted: #a3a39d; --line: #3a3a36; --accent: #fb923c;
+      --kbd: #2c2c29;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141413; --panel: #1f1f1d; --text: #ececea; --muted: #a3a39d; --line: #3a3a36; --accent: #fb923c; --kbd: #2c2c29;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: 100vh; }
+  #stage { position: relative; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 16px; }
+  #frame { position: relative; flex: none; background: #000; box-shadow: 0 1px 4px rgba(0,0,0,.4); cursor: crosshair; user-select: none; }
+  #frame img { display: block; width: 100%; height: 100%; image-rendering: auto; pointer-events: none; }
+  #frame svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #side { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; overflow-x: hidden; padding: 14px 16px; min-width: 0; }
+  #side td, #side .meta { overflow-wrap: anywhere; }
+  h1 { font-size: 16px; margin: 0 0 6px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=text] { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; }
+  kbd { background: var(--kbd); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, Menlo, Consolas, monospace; }
+  table.keys { border-collapse: collapse; width: 100%; font-size: 13px; table-layout: fixed; }
+  table.keys td { padding: 2px 4px; vertical-align: top; }
+  table.keys td:first-child { width: 118px; }
+  #boxes { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+  #boxes li { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  #boxes li.sel { outline: 2px solid var(--accent); }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--public); }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: .95; }
+  #empty { padding: 40px; max-width: 640px; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; font-size: 12px; color: var(--muted); }
+  textarea#note { width: 100%; min-height: 48px; font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  @media (max-width: 800px) { #app { grid-template-columns: 1fr; height: auto; } #side { border-left: 0; border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage"><div id="frame"><img id="img" alt="NAIP tile"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div></div>
+  <div id="side">
+    <h1>Hoop Hunter gold labels</h1>
+    <div class="meta" id="progressText"></div>
+    <div class="bar" style="margin:6px 0 10px"><div id="progressBar" style="width:0"></div></div>
+    <div class="meta" id="tileMeta"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="prevBtn" title="Previous tile (Left)">&larr; Prev</button>
+      <button id="nextBtn" title="Next tile (Right)">Next &rarr;</button>
+      <button id="nextOpenBtn" title="Next unreviewed (N)">Next unreviewed</button>
+      <button id="mapBtn" title="Open satellite map (G)">Map</button>
+    </div>
+    <h2>Boxes in this tile</h2>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--pending)"></i>to check</span>
+      <span><i class="swatch" style="background:var(--public)"></i>public</span>
+      <span><i class="swatch" style="background:var(--home)"></i>home</span>
+      <span><i class="swatch" style="background:var(--residents)"></i>residents</span>
+      <span><i class="swatch" style="background:var(--unsure)"></i>court, access ?</span>
+      <span><i class="swatch" style="background:var(--rejected)"></i>not a court</span>
+    </div>
+    <ul id="boxes"></ul>
+    <textarea id="note" placeholder="Note for this tile (optional)"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="doneBtn" title="Mark reviewed and go on (Space)">Tile done &middot; Space</button>
+    </div>
+    <h2>Keys</h2>
+    <table class="keys">
+      <tr><td colspan="2" class="meta">The next box to check is selected for you (white outline): just press a key for each box. Use Tab only to go back and change one.</td></tr>
+      <tr><td><kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>move the selection to the next / previous box</td></tr>
+      <tr><td><kbd>1</kbd></td><td>court, public (park, school, church...)</td></tr>
+      <tr><td><kbd>2</kbd></td><td>court on a home lot (private)</td></tr>
+      <tr><td><kbd>3</kbd></td><td>court for residents only (apartments, HOA)</td></tr>
+      <tr><td><kbd>4</kbd> or <kbd>Y</kbd></td><td>court, access unsure</td></tr>
+      <tr><td><kbd>X</kbd> <kbd>Del</kbd></td><td>not a court (deletes a drawn box)</td></tr>
+      <tr><td>drag</td><td>draw a missed court (then press 1-4)</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>tile done, next tile (all boxes must be decided)</td></tr>
+      <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>N</kbd></td><td>previous / next / next unreviewed tile</td></tr>
+      <tr><td><kbd>U</kbd> <kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>undo</td></tr>
+      <tr><td><kbd>H</kbd> <kbd>Z</kbd> <kbd>G</kbd></td><td>hide boxes / zoom 2x / open map</td></tr>
+      <tr><td><kbd>S</kbd></td><td>download results JSON</td></tr>
+    </table>
+    <h2>Save and send</h2>
+    <div class="meta" style="margin-bottom:6px">Work is saved in this browser automatically. To send results, download the JSON (or copy it) and send the file to the pipeline owner.</div>
+    <input type="text" id="labeler" placeholder="Your name or initials">
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="dlBtn">Download JSON</button>
+      <button id="copyBtn">Copy JSON</button>
+      <label class="row"><button id="importBtn" type="button">Import JSON</button><input type="file" id="importFile" accept=".json,application/json" hidden></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="themeBtn" type="button">Theme</button>
+      <button id="resetBtn" type="button" title="Forget everything saved in this browser for this task set">Reset</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="data/tasks.js"></script>
+<script>
+"use strict";
+(function () {
+  const TASKS = window.HH_TASKS;
+  const $ = (id) => document.getElementById(id);
+  const toast = (msg) => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 1600); };
+  if (!TASKS || !Array.isArray(TASKS.tiles) || !TASKS.tiles.length) {
+    $("app").innerHTML = '<div id="empty"><h1>No tasks found</h1><p>This page reads <code>data/tasks.js</code> and <code>data/images/</code> next to it. ' +
+      'Generate them with <code>python -m hoop_pipeline.gold export</code>, or unzip the data folder you were sent into <code>tools/label/data/</code>, then reload.</p></div>';
+    return;
+  }
+  const STORE = "hh-gold:" + TASKS.tasks_id;
+  const COLORS = { pending: "var(--pending)", public: "var(--public)", home: "var(--home)", residents: "var(--residents)", unsure: "var(--unsure)", rejected: "var(--rejected)" };
+  const PX = TASKS.tile_px || 640;
+  let S = load();
+  let cur = Math.min(S.cur || 0, TASKS.tiles.length - 1);
+  let sel = -1, hide = false, zoom = false;
+  const undo = [];
+
+  function blankTile(t) {
+    return { reviewed: false, note: "", updated: null,
+      boxes: t.preds.map((p) => ({ id: p.id, x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1, origin: "pred", pred_conf: p.conf, status: "pending", access: null })) };
+  }
+  function load() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { s = null; }
+    if (!s || !s.tiles) s = { tiles: {}, labeler: "", cur: 0 };
+    return s;
+  }
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* private window: still works, just not persisted */ }
+  }
+  function tileState(i) {
+    const t = TASKS.tiles[i];
+    if (!S.tiles[t.id]) S.tiles[t.id] = blankTile(t);
+    return S.tiles[t.id];
+  }
+  function snapshot() { const t = TASKS.tiles[cur]; undo.push({ i: cur, id: t.id, st: JSON.stringify(tileState(cur)) }); if (undo.length > 200) undo.shift(); }
+  function touch() { const st = tileState(cur); st.updated = new Date().toISOString(); S.cur = cur; save(); render(); }
+  function kind(b) { return b.status === "court" ? (b.access || "unsure") : b.status; }
+
+  // ---------------------------------------------------------------- rendering
+  function render() {
+    const t = TASKS.tiles[cur], st = tileState(cur);
+    const img = $("img");
+    if (img.getAttribute("src") !== t.image) img.src = t.image;
+    const avail = Math.max(320, Math.min(window.innerHeight - 32, (window.innerWidth > 800 ? window.innerWidth - 340 : window.innerWidth) - 32));
+    const size = zoom ? avail * 2 : avail;
+    $("frame").style.width = size + "px"; $("frame").style.height = size + "px";
+    const svg = $("svg");
+    svg.setAttribute("viewBox", "0 0 " + PX + " " + PX);
+    let html = "";
+    if (!hide) st.boxes.forEach((b, k) => {
+      const c = COLORS[kind(b)], w = (k === sel ? 3.5 : 2) * PX / size * 1.6;
+      const dash = b.status === "pending" ? ' stroke-dasharray="6 4"' : (b.status === "rejected" ? ' stroke-dasharray="2 4"' : "");
+      if (k === sel) html += '<rect x="' + (b.x0 - 3) + '" y="' + (b.y0 - 3) + '" width="' + (b.x1 - b.x0 + 6) + '" height="' + (b.y1 - b.y0 + 6) + '" fill="none" stroke="#fff" stroke-width="' + (w * 0.8) + '" opacity=".9"/>';
+      html += '<rect data-k="' + k + '" x="' + b.x0 + '" y="' + b.y0 + '" width="' + (b.x1 - b.x0) + '" height="' + (b.y1 - b.y0) + '" fill="transparent" stroke="' + c + '" stroke-width="' + w + '"' + dash + ' style="cursor:pointer"/>';
+      const label = (b.origin === "pred" ? b.pred_conf.toFixed(2) : "drawn") + (b.status === "court" ? " " + (b.access || "?") : "");
+      html += '<text x="' + (b.x0 + 2) + '" y="' + Math.max(10, b.y0 - 3) + '" fill="' + c + '" font-size="' + (11 * PX / size * 1.6) + '" font-family="system-ui" paint-order="stroke" stroke="#000" stroke-width="2">' + label + "</text>";
+    });
+    if (drag) html += '<rect x="' + Math.min(drag.x0, drag.x1) + '" y="' + Math.min(drag.y0, drag.y1) + '" width="' + Math.abs(drag.x1 - drag.x0) + '" height="' + Math.abs(drag.y1 - drag.y0) + '" fill="none" stroke="#fff" stroke-dasharray="4 3" stroke-width="2"/>';
+    svg.innerHTML = html;
+    // side panel
+    const done = TASKS.tiles.filter((x) => S.tiles[x.id] && S.tiles[x.id].reviewed).length;
+    $("progressText").innerHTML = "Tile <b>" + (cur + 1) + "</b> of " + TASKS.tiles.length + " &middot; reviewed <b>" + done + "</b>" + (st.reviewed ? " &middot; <b style='color:var(--public)'>this tile done</b>" : "");
+    $("progressBar").style.width = (100 * done / TASKS.tiles.length) + "%";
+    $("tileMeta").innerHTML = "<b>" + t.id + "</b> &middot; " + t.region + " / " + t.stratum + " &middot; " + t.state +
+      "<br>" + t.lat.toFixed(5) + ", " + t.lon.toFixed(5) + " &middot; NAIP " + (t.naip_date || "?") + " &middot; 640 px = 384 m";
+    const ul = $("boxes");
+    ul.innerHTML = st.boxes.map((b, k) => '<li data-k="' + k + '" class="' + (k === sel ? "sel" : "") + '"><i class="swatch" style="background:' + COLORS[kind(b)] + '"></i>' +
+      (b.origin === "pred" ? "model " + b.pred_conf.toFixed(2) : "drawn") + " &middot; " + (b.status === "pending" ? "to check" : b.status === "rejected" ? "not a court" : "court, " + (b.access || "access ?")) +
+      " <span class='meta'>" + Math.round((b.x1 - b.x0) * 0.6) + "x" + Math.round((b.y1 - b.y0) * 0.6) + " m</span></li>").join("") ||
+      '<li class="meta">No boxes. Draw any court the model missed, then press Space.</li>';
+    $("note").value = st.note || "";
+    $("labeler").value = S.labeler || "";
+  }
+
+  // ---------------------------------------------------------------- actions
+  function go(i) { if (i < 0 || i >= TASKS.tiles.length) return; cur = i; sel = -1; S.cur = cur; save(); firstPending(); render(); }
+  function firstPending() { const st = tileState(cur); sel = st.boxes.findIndex((b) => b.status === "pending"); }
+  function selectStep(d) {
+    const st = tileState(cur); if (!st.boxes.length) return;
+    sel = sel < 0 ? (d > 0 ? 0 : st.boxes.length - 1) : (sel + d + st.boxes.length) % st.boxes.length; render();
+  }
+  function decide(status, access) {
+    const st = tileState(cur);
+    if (sel < 0 || sel >= st.boxes.length) { toast("Select a box first (Tab)"); return; }
+    snapshot();
+    const b = st.boxes[sel];
+    if (status === "rejected" && b.origin === "drawn") { st.boxes.splice(sel, 1); sel = -1; }
+    else { b.status = status; b.access = status === "court" ? access : null; }
+    st.reviewed = false;
+    const next = st.boxes.findIndex((x) => x.status === "pending");
+    sel = next;
+    touch();
+  }
+  function tileDone() {
+    const st = tileState(cur);
+    const pend = st.boxes.findIndex((b) => b.status === "pending");
+    if (pend >= 0) { sel = pend; render(); toast("Decide every box first (1-4 or X)"); return; }
+    snapshot(); st.reviewed = true; touch();
+    const nxt = nextOpen(cur);
+    if (nxt >= 0) go(nxt); else toast("All tiles reviewed. Download the JSON and send it.");
+  }
+  function nextOpen(from) {
+    for (let k = 1; k <= TASKS.tiles.length; k++) { const i = (from + k) % TASKS.tiles.length; const s = S.tiles[TASKS.tiles[i].id]; if (!s || !s.reviewed) return i; }
+    return -1;
+  }
+  function doUndo() {
+    const u = undo.pop(); if (!u) { toast("Nothing to undo"); return; }
+    S.tiles[u.id] = JSON.parse(u.st); if (cur !== u.i) cur = u.i; sel = -1; save(); render();
+  }
+  function exportObj() {
+    const tiles = {};
+    TASKS.tiles.forEach((t) => {
+      const s = S.tiles[t.id]; if (!s) return;
+      tiles[t.id] = { reviewed: !!s.reviewed, note: s.note || "", updated: s.updated,
+        boxes: s.boxes.filter((b) => b.status === "court").map((b) => ({ x0: +b.x0.toFixed(1), y0: +b.y0.toFixed(1), x1: +b.x1.toFixed(1), y1: +b.y1.toFixed(1), origin: b.origin, pred_id: b.origin === "pred" ? b.id : null, pred_conf: b.origin === "pred" ? b.pred_conf : null, label: "court", access: b.access || "unsure" })),
+        rejected_preds: s.boxes.filter((b) => b.status === "rejected" && b.origin === "pred").map((b) => b.id),
+        pending_preds: s.boxes.filter((b) => b.status === "pending").map((b) => b.id) };
+    });
+    return { tool: "hoop-hunter-gold-label", version: 1, tasks_id: TASKS.tasks_id, labeler: S.labeler || "", exported: new Date().toISOString(),
+      reviewed: Object.values(tiles).filter((t) => t.reviewed).length, total_tiles: TASKS.tiles.length, tiles: tiles };
+  }
+  function download() {
+    const blob = new Blob([JSON.stringify(exportObj(), null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "hoop_gold_labels_" + (S.labeler || "anon").replace(/[^A-Za-z0-9_-]/g, "") + "_" + new Date().toISOString().slice(0, 10) + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast("Downloaded " + a.download);
+  }
+  async function copy() {
+    const txt = JSON.stringify(exportObj());
+    try { await navigator.clipboard.writeText(txt); toast("Copied JSON to the clipboard"); return; } catch (e) { /* fall through */ }
+    const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast("Copied JSON to the clipboard"); } catch (e) { toast("Copy failed; use Download"); }
+    ta.remove();
+  }
+  function importJson(obj) {
+    if (!obj || obj.tool !== "hoop-hunter-gold-label") { toast("Not a Hoop Hunter labels file"); return; }
+    let n = 0;
+    TASKS.tiles.forEach((t) => {
+      const r = obj.tiles && obj.tiles[t.id]; if (!r) return;
+      const st = blankTile(t);
+      st.reviewed = !!r.reviewed; st.note = r.note || ""; st.updated = r.updated || null;
+      const rej = new Set(r.rejected_preds || []);
+      st.boxes.forEach((b) => { if (rej.has(b.id)) b.status = "rejected"; });
+      (r.boxes || []).forEach((b) => {
+        const p = b.pred_id ? st.boxes.find((x) => x.id === b.pred_id) : null;
+        if (p) { p.status = "court"; p.access = b.access === "unsure" ? null : b.access; }
+        else st.boxes.push({ id: "d" + Math.random().toString(36).slice(2, 8), x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, origin: "drawn", pred_conf: 0, status: "court", access: b.access === "unsure" ? null : b.access });
+      });
+      S.tiles[t.id] = st; n++;
+    });
+    if (obj.labeler) S.labeler = obj.labeler;
+    save(); render(); toast("Imported " + n + " tiles");
+  }
+
+  // ---------------------------------------------------------------- mouse
+  let drag = null;
+  function toPx(ev) { const r = $("frame").getBoundingClientRect(); return { x: Math.max(0, Math.min(PX, (ev.clientX - r.left) / r.width * PX)), y: Math.max(0, Math.min(PX, (ev.clientY - r.top) / r.height * PX)) }; }
+  $("frame").addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    const k = ev.target && ev.target.getAttribute ? ev.target.getAttribute("data-k") : null;
+    if (k !== null && k !== undefined) { sel = +k; render(); return; }
+    const p = toPx(ev); drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; ev.preventDefault();
+  });
+  window.addEventListener("mousemove", (ev) => { if (!drag) return; const p = toPx(ev); drag.x1 = p.x; drag.y1 = p.y; render(); });
+  window.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const b = { x0: Math.min(drag.x0, drag.x1), y0: Math.min(drag.y0, drag.y1), x1: Math.max(drag.x0, drag.x1), y1: Math.max(drag.y0, drag.y1) };
+    drag = null;
+    if (b.x1 - b.x0 < 5 || b.y1 - b.y0 < 5) { sel = -1; render(); return; }
+    snapshot();
+    const st = tileState(cur);
+    st.boxes.push({ id: "d" + Math.random().toString(36).slice(2, 8), x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, origin: "drawn", pred_conf: 0, status: "court", access: null });
+    sel = st.boxes.length - 1; st.reviewed = false; touch(); toast("Drawn. Press 1-4 to tag access, X to delete");
+  });
+  $("boxes").addEventListener("click", (ev) => { const li = ev.target.closest("li[data-k]"); if (li) { sel = +li.getAttribute("data-k"); render(); } });
+
+  // ---------------------------------------------------------------- keys
+  window.addEventListener("keydown", (ev) => {
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA")) { if (ev.key === "Escape") ev.target.blur(); return; }
+    const k = ev.key;
+    if ((ev.ctrlKey || ev.metaKey) && (k === "z" || k === "Z")) { ev.preventDefault(); doUndo(); return; }
+    if ((ev.ctrlKey || ev.metaKey) && (k === "s" || k === "S")) { ev.preventDefault(); download(); return; }
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    switch (k) {
+      case "Tab": ev.preventDefault(); selectStep(ev.shiftKey ? -1 : 1); break;
+      case "1": decide("court", "public"); break;
+      case "2": decide("court", "home"); break;
+      case "3": decide("court", "residents"); break;
+      case "4": case "y": case "Y": decide("court", null); break;
+      case "x": case "X": case "Delete": case "Backspace": ev.preventDefault(); decide("rejected", null); break;
+      case " ": ev.preventDefault(); tileDone(); break;
+      case "ArrowRight": go(cur + 1); break;
+      case "ArrowLeft": go(cur - 1); break;
+      case "n": case "N": { const i = nextOpen(cur); if (i >= 0) go(i); else toast("All tiles reviewed"); break; }
+      case "u": case "U": doUndo(); break;
+      case "h": case "H": hide = !hide; render(); break;
+      case "z": case "Z": zoom = !zoom; render(); break;
+      case "g": case "G": openMap(); break;
+      case "s": case "S": download(); break;
+      default: return;
+    }
+  });
+  function openMap() { const t = TASKS.tiles[cur]; window.open("https://www.google.com/maps/@" + t.lat + "," + t.lon + ",19z/data=!3m1!1e3", "_blank", "noopener"); }
+
+  $("prevBtn").onclick = () => go(cur - 1);
+  $("nextBtn").onclick = () => go(cur + 1);
+  $("nextOpenBtn").onclick = () => { const i = nextOpen(cur); if (i >= 0) go(i); };
+  $("mapBtn").onclick = openMap;
+  $("doneBtn").onclick = tileDone;
+  $("dlBtn").onclick = download;
+  $("copyBtn").onclick = copy;
+  $("importBtn").onclick = () => $("importFile").click();
+  $("importFile").onchange = (ev) => { const f = ev.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { try { importJson(JSON.parse(r.result)); } catch (e) { toast("Could not read that file"); } }; r.readAsText(f); ev.target.value = ""; };
+  $("labeler").oninput = (ev) => { S.labeler = ev.target.value; save(); };
+  $("note").oninput = (ev) => { tileState(cur).note = ev.target.value; save(); };
+  $("themeBtn").onclick = () => { const r = document.documentElement; const d = r.getAttribute("data-theme"); r.setAttribute("data-theme", d === "dark" ? "light" : "dark"); };
+  $("resetBtn").onclick = () => { if (confirm("Forget all labels saved in this browser for this task set? (Download them first if you need them.)")) { S = { tiles: {}, labeler: S.labeler, cur: 0 }; save(); go(0); } };
+  window.addEventListener("resize", render);
+  $("img").onerror = () => toast("Image missing: " + TASKS.tiles[cur].image);
+  go(cur);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Copy to .github/workflows/lambda-watchdog.yml (repo root) to run the local backstop every 10 minutes
+# from GitHub Actions. Add the Lambda API key as the repository secret LAMBDA_API_KEY first, and update
+# that secret whenever the key is rotated. last_run.json and the first-sighting state are not in git, so on
+# Actions only the deadline in the instance name ("-xYYMMDDHHMM", added by launch.sh) is enforced; run the
+# watchdog on a machine with the repo checkout too (Task Scheduler) to cover instances without one.
+name: lambda-watchdog
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: terminate Hoop Hunter instances past their deadline
+        env:
+          LAMBDA_API_KEY: ${{ secrets.LAMBDA_API_KEY }}
+        run: python pipeline/cloud/watchdog.py --key-env LAMBDA_API_KEY --hard-cap-hours 24

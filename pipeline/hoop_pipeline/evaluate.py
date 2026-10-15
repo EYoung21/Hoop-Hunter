@@ -87,6 +87,21 @@ def predict_split(model: Any, images: list[Path], imgsz: int, batch: int, device
     return out
 
 
+def predict_split_fast(det: Any, images: list[Path], batch: int, conf: float) -> list[dict[str, Any]]:
+    """Same predictions through FastDetector (the scan engine's GPU path), optionally with TTA."""
+    import torch
+
+    from .label_clean import iter_images
+
+    out = []
+    for chunk, arr in iter_images(images, batch, 16):
+        d = det.detect(torch.from_numpy(arr), conf=conf, iou=0.5).cpu().numpy()
+        for i, p in enumerate(chunk):
+            m = d[:, 0] == i
+            out.append({"path": p, "xyxy": d[m, 1:5].astype(float), "conf": d[m, 5].astype(float)})
+    return out
+
+
 def pr_table(preds: list[dict[str, Any]], gts: list[np.ndarray], thresholds: list[float], thr_iou: float) -> list[dict[str, Any]]:
     rows = []
     for t in thresholds:
@@ -135,6 +150,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="recommended threshold = lowest conf whose precision (IoU 0.3) reaches this")
     ap.add_argument("--montage", type=int, default=24, help="images per error montage")
     ap.add_argument("--no-ultralytics-val", action="store_true")
+    ap.add_argument("--fast", action="store_true", help="P/R tables from FastDetector (the scan engine's path)")
+    ap.add_argument("--tta", default="none", choices=["none", "lr", "lrud"], help="with --fast: flip TTA")
+    ap.add_argument("--engine", type=Path, help="with --fast: TensorRT engine (checks the scan's engine against PyTorch)")
     ap.add_argument("--seed", type=int, default=0)
     add_common_args(ap)
     args = ap.parse_args(argv)
@@ -175,8 +193,16 @@ def main(argv: list[str] | None = None) -> None:
                              "recall": round(float(np.interp(t, px, r_curve)), 4)} for t in THRESHOLDS}
         log.info("ultralytics %s: %s", args.split, {k: v for k, v in summary["ultralytics"].items() if k != "pr_at_conf"})
 
-    preds = predict_split(model, images, args.imgsz, args.batch, device, conf=min(THRESHOLDS))
-    gts = [load_gt(label_dir / (p["path"].stem + ".txt"), args.imgsz) for p in preds]
+    if args.fast:
+        from .fastdet import FastDetector
+
+        det = FastDetector(args.weights, imgsz=args.imgsz, tta=args.tta, engine=args.engine)
+        preds = predict_split_fast(det, images, args.batch, conf=min(THRESHOLDS))
+        summary["fast"] = {"imgsz": det.imgsz, "tta": args.tta, "backend": det.info.backend}
+    else:
+        preds = predict_split(model, images, args.imgsz, args.batch, device, conf=min(THRESHOLDS))
+    chip_px = int(Image.open(images[0]).size[0]) if images else args.imgsz
+    gts = [load_gt(label_dir / (p["path"].stem + ".txt"), chip_px) for p in preds]
     strict = pr_table(preds, gts, THRESHOLDS, 0.5)
     loose = pr_table(preds, gts, THRESHOLDS, 0.3)
     summary["pr_iou50"] = strict

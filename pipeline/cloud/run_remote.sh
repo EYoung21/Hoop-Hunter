@@ -2,23 +2,22 @@
 # Run ON the instance: one pipeline stage, with start/done/failed markers in ~/hh/logs.
 # Normally started in the background by cloud/start_stage.sh; extra args go to the Python step.
 #
-# Stages, in order:
+# Stages (v1 run order: setup, pbf, osm, naip, dataset, train, scan_plan, scan_fetch, eval, scan_detect):
 #   setup        apt + venv + pip (setup_remote.sh)
 #   pbf          download the Geofabrik US extract (~12 GB), verify md5
 #   osm          osm_extract -> data/osm_us/{courts_us,indoor_us,context_us}.parquet, courts_TN.geojson
 #   naip         NAIP GeoParquet catalog + per-state year summary
-#   dataset      build_dataset_us -> datasets/us   (pilot: dataset --pilot 2000 --out datasets/us_pilot)
+#   dataset      build_dataset_us -> datasets/us   (v1)
+#   dataset2     build_dataset_us -> datasets/us2  (v2 negative mix, see README "v2 workflow")
 #   train        YOLO training -> weights/best.pt, runs/<name>/
-#   scan_plan    TN mask + tile plan; scan_fetch: cache TN imagery blocks (can overlap training)
 #   eval         evaluate on the TN holdout (val) and the val_us slice
-#   scan_detect  detector over cached TN blocks -> out/candidates_tn.geojson + crops
-#   post_train   eval + scan_detect + 640 px re-tiled scan + inference benchmark (GPU work after training)
+#   scan_plan / scan_fetch / scan_detect   v1 masked statewide scan (scan_state)
 #   package      tar the results for cloud/fetch_results.sh
+#   job NAME CMD...   run any command (e.g. "python -m hoop_pipeline.label_clean score ...") with markers
+#                     NAME.{start,done,failed} and log NAME.log; "python" means the venv's python
 #
 # The whole script is one function that is called on the last line: bash parses it
 # completely before running anything, so editing this file while a stage runs is safe.
-# (bash reads plain scripts incrementally; an in-place edit during a long stage once made
-# the stage die after its job finished, before writing its .done marker.)
 set -E
 main() {
   set -uo pipefail
@@ -28,12 +27,18 @@ main() {
   PY=~/hhvenv/bin/python
   LOGS=~/hh/logs
   mkdir -p "$LOGS" data/osm_us
-  date -u +%FT%TZ > "$LOGS/$STAGE.start"
-  trap 'date -u +%FT%TZ > "$LOGS/$STAGE.failed"; echo "STAGE $STAGE FAILED"' ERR
+  MARK="$STAGE"
+  if [ "$STAGE" = "job" ]; then MARK="${1:?job name}"; shift; fi
+  date -u +%FT%TZ > "$LOGS/$MARK.start"
+  trap 'date -u +%FT%TZ > "$LOGS/$MARK.failed"; echo "STAGE $MARK FAILED"' ERR
   set -e
   RUN_NAME="${HH_RUN_NAME:-us-y11s}"
+  export PYTHONPATH=~/hh/pipeline
+  export HH_ANONYMOUS_READS="${HH_ANONYMOUS_READS:-}"
 
   case "$STAGE" in
+    job)
+      if [ "${1:-}" = "python" ]; then shift; "$PY" "$@"; else "$@"; fi ;;
     setup)
       bash cloud/setup_remote.sh ;;
     pbf)
@@ -53,7 +58,6 @@ main() {
     naip)
       $PY - "$@" <<'EOF'
 import json
-from collections import defaultdict
 import numpy as np
 from hoop_pipeline import config
 from hoop_pipeline.common import setup_logging, write_json
@@ -75,6 +79,10 @@ EOF
       ;;
     dataset)
       $PY -m hoop_pipeline.build_dataset_us --out datasets/us --workers 64 "$@" ;;
+    dataset2)
+      $PY -m hoop_pipeline.build_dataset_us --out datasets/us2 --workers 96 --neg-ratio 2.0 \
+        --neg-mix "pitch_tennis=0.22,pitch_pickleball=0.08,pitch_volleyball=0.05,pitch_other=0.05,parking=0.12,pool=0.07,playground=0.04,park=0.09,school=0.09,residential=0.07,apartments=0.04,random_land=0.08" \
+        "$@" ;;
     train)
       $PY -m hoop_pipeline.train --data datasets/us/data.yaml --model yolo11s.pt --epochs 80 --imgsz 320 \
         --batch 256 --workers 16 --patience 15 --cache ram --name "$RUN_NAME" --set deterministic=False "$@" ;;
@@ -88,36 +96,21 @@ EOF
       $PY -m hoop_pipeline.scan_state fetch --state TN --workers 48 "$@" ;;
     scan_detect)
       $PY -m hoop_pipeline.scan_state detect --state TN --weights weights/best.pt --out out/candidates_tn.geojson "$@" ;;
-    post_train)
-      # everything that needs the GPU after training, in order
-      bash cloud/run_remote.sh eval
-      bash cloud/run_remote.sh scan_detect --crops 300
-      $PY -m hoop_pipeline.scan_state detect --state TN --weights weights/best.pt --retile 640 \
-        --out out/candidates_tn_640.geojson --crops 0 --no-tag-kinds
-      timeout 1500 env PYTHONPATH=. $PY cloud/bench_infer.py --trt || echo "bench_infer exited with $?" ;;
     package)
       trap - ERR
       set +e
       cd ~/hh/pipeline
-      mkdir -p out/cloud/logs data/dataset_us
+      mkdir -p out/cloud/logs
       cp -f "$LOGS"/* out/cloud/logs/ 2>/dev/null
       nvidia-smi > out/cloud/logs/nvidia-smi.txt 2>&1
-      cp -f datasets/us/manifest.csv.gz datasets/us/stats.json datasets/us/data.yaml data/dataset_us/ 2>/dev/null
-      cp -rf datasets/us/previews data/dataset_us/ 2>/dev/null
-      LIST=$(ls -d weights/best.pt weights/best.json runs/*/results.csv runs/*/results.png runs/*/*.png runs/*/*.jpg \
-        runs/*/args.yaml runs/*/hoop_summary.json out/eval_tn out/eval_us out/candidates_tn.geojson \
-        out/candidates_tn_640.geojson out/candidates_tn_crops \
-        out/candidates_tn_crops_sheet_*.jpg out/bench_*.json out/cloud data/osm_us/courts_us.parquet \
-        data/osm_us/indoor_us.parquet data/osm_us/courts_TN.geojson data/osm_us/summary.json \
-        data/naip_index/naip_summary.json data/dataset_us data/scan/TN/plan_stats.json data/scan/TN/fetch_stats.json \
-        data/scan/TN/mask.geojson 2>/dev/null)
-      tar czf ~/hh/results.tgz $LIST
+      LIST=$(ls -d "$@" 2>/dev/null)
+      tar czf ~/hh/results.tgz out/cloud/logs $LIST
       ls -la ~/hh/results.tgz ;;
     *)
       echo "unknown stage $STAGE" >&2
       exit 2 ;;
   esac
-  date -u +%FT%TZ > "$LOGS/$STAGE.done"
-  echo "STAGE $STAGE DONE"
+  date -u +%FT%TZ > "$LOGS/$MARK.done"
+  echo "STAGE $MARK DONE"
 }
 main "$@"; exit $?

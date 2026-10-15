@@ -69,7 +69,8 @@ def main() -> None:
     res: dict[str, Any] = {"gpu": torch.cuda.get_device_name(0), "torch": torch.__version__, "imgsz": args.imgsz,
                            "weights": str(args.weights)}
     yolo = YOLO(str(args.weights))
-    net = yolo.model.fuse().eval().cuda()
+    model_any: Any = yolo.model
+    net = model_any.fuse().eval().cuda()
     raw: dict[str, Any] = {}
     for dtype_name, dtype in (("fp32", torch.float32), ("fp16", torch.float16)):
         m = net.half() if dtype == torch.float16 else net.float()
@@ -105,10 +106,12 @@ def main() -> None:
     res["raw_forward_large_tiles"] = big
     # NMS cost on a realistic batch output
     try:
+        import importlib
+
         try:
-            from ultralytics.utils.nms import non_max_suppression
-        except ImportError:
-            from ultralytics.utils.ops import non_max_suppression
+            non_max_suppression = importlib.import_module("ultralytics.utils.nms").non_max_suppression
+        except (ImportError, AttributeError):
+            non_max_suppression = importlib.import_module("ultralytics.utils.ops").non_max_suppression
         x = torch.rand(256, 3, args.imgsz, args.imgsz, device="cuda", dtype=torch.float16)
         with torch.inference_mode():
             pred = net.half()(x)

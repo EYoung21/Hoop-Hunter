@@ -6,7 +6,10 @@
 * ``court_like``: the feature *is* a court (``leisure=pitch`` or a bare
   ``sport=basketball`` area), not a park, school or centre that merely has one.
 * ``indoor_kind``: membership in the indoor-court layer.
-* ``context_kinds``: hard-negative and scan-mask categories.
+* ``context_kinds``: hard-negative, scan-mask, public-site and residential categories.
+* ``SITE_OF_KIND``: which public-site type ("park", "school", "college", "church", "rec",
+  "community") a context kind stands for; ``RESTRICTED_KINDS`` are sites whose courts are never
+  public (prisons, military land).
 """
 
 from __future__ import annotations
@@ -25,13 +28,29 @@ CONTAINER_KEYS = ("amenity", "landuse", "building", "shop", "club", "office", "t
 
 # Small pitches that look like courts from above (used for "pitch_other" hard negatives).
 MULTI_SPORT_VALUES = {"multi", "multisport", "multi-sport"}
+VOLLEYBALL_VALUES = {"volleyball", "beachvolleyball", "beach_volleyball"}
 
-# Scan-mask kinds (where public courts usually are) and hard-negative kinds.
+# Scan-mask kinds (where public courts usually are; v1 masked scan) and hard-negative kinds.
 MASK_KINDS = ("park", "school", "college", "worship", "community_centre", "recreation_ground", "sports_centre",
               "apartments")
-NEGATIVE_KINDS = ("pitch_tennis", "pitch_other", "parking", "pool", "playground", "park", "school")
+NEGATIVE_KINDS = ("pitch_tennis", "pitch_pickleball", "pitch_volleyball", "pitch_other", "parking", "pool",
+                  "playground", "park", "school")
 # Kinds whose polygons are dropped in the nationwide context layer (only the center is needed).
 POINT_ONLY_KINDS = {"parking"}
+
+# Public-site type for each context kind (privacy classification; see privacy.py).
+SITE_OF_KIND: dict[str, str] = {
+    "park": "park", "playground": "park", "recreation_ground": "rec", "sports_centre": "rec",
+    "school": "school", "education": "school", "college": "college",
+    "worship": "church", "religious": "church", "community_centre": "community",
+}
+PUBLIC_SITE_KINDS = tuple(SITE_OF_KIND)
+# Courts on these sites are never public.
+RESTRICTED_KINDS = ("military", "prison")
+# Residential context.
+RESIDENTIAL_KINDS = ("residential", "apartments", "apartments_bldg")
+# access=* values that make a site or court not open to the public.
+PRIVATE_ACCESS = {"private", "no", "customers", "residents", "members", "permit", "students", "military"}
 
 
 def sport_values(tags: Mapping[str, str]) -> set[str]:
@@ -80,17 +99,29 @@ def indoor_kind(tags: Mapping[str, str]) -> str | None:
     return None
 
 
+def pitch_kind(sports: set[str]) -> str:
+    """Hard-negative kind of a non-basketball outdoor pitch."""
+    if "tennis" in sports:
+        return "pitch_tennis"
+    if "pickleball" in sports or "paddle_tennis" in sports or "padel" in sports:
+        return "pitch_pickleball"
+    if sports & VOLLEYBALL_VALUES:
+        return "pitch_volleyball"
+    return "pitch_other"
+
+
 def context_kinds(tags: Mapping[str, str], basketball: bool | None = None) -> list[str]:
-    """Hard-negative / scan-mask categories of a feature (may be several)."""
+    """Hard-negative / scan-mask / public-site / residential categories of a feature (may be several)."""
     if basketball is None:
         basketball = is_basketball(tags)
     kinds: list[str] = []
     leisure, amenity, landuse = tags.get("leisure"), tags.get("amenity"), tags.get("landuse")
+    building = tags.get("building")
     indoorish = is_indoorish(tags)
     if leisure == "pitch" and not basketball and not indoorish:
         sports = sport_values(tags)
         if sports and not (sports & MULTI_SPORT_VALUES):  # multi-sport pads often have hoops: not a safe negative
-            kinds.append("pitch_tennis" if "tennis" in sports else "pitch_other")
+            kinds.append(pitch_kind(sports))
     if amenity == "parking" and tags.get("parking") != "underground" and "building" not in tags:
         kinds.append("parking")
     if (leisure == "swimming_pool" or amenity == "swimming_pool") and not indoorish:
@@ -101,18 +132,30 @@ def context_kinds(tags: Mapping[str, str], basketball: bool | None = None) -> li
         kinds.append("park")
     if amenity == "school":
         kinds.append("school")
+    if landuse == "education":
+        kinds.append("education")
     if amenity in ("college", "university"):
         kinds.append("college")
     if amenity == "place_of_worship":
         kinds.append("worship")
+    if landuse == "religious":
+        kinds.append("religious")
     if amenity == "community_centre":
         kinds.append("community_centre")
     if landuse == "recreation_ground" or leisure == "recreation_ground":
         kinds.append("recreation_ground")
     if leisure == "sports_centre":
         kinds.append("sports_centre")
+    if landuse == "military" or "military" in tags and tags.get("military") not in ("no", None):
+        kinds.append("military")
+    if amenity == "prison":
+        kinds.append("prison")
     if tags.get("residential") == "apartments" and landuse in ("residential", None):
         kinds.append("apartments")
+    elif landuse == "residential":
+        kinds.append("residential")
+    if building in ("apartments", "dormitory"):
+        kinds.append("apartments_bldg")
     return kinds
 
 
@@ -120,7 +163,9 @@ def context_kinds(tags: Mapping[str, str], basketball: bool | None = None) -> li
 OSMIUM_FILTERS = [
     "nwr/sport",
     "nwr/leisure=pitch,park,playground,recreation_ground,sports_centre,sports_hall,fitness_centre,swimming_pool",
-    "nwr/amenity=parking,school,college,university,place_of_worship,community_centre,swimming_pool",
-    "nwr/landuse=recreation_ground",
+    "nwr/amenity=parking,school,college,university,place_of_worship,community_centre,swimming_pool,prison",
+    "nwr/landuse=recreation_ground,residential,education,religious,military",
     "nwr/residential=apartments",
+    "nwr/building=apartments,dormitory",
+    "nwr/military",
 ]

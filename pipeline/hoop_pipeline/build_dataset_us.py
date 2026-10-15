@@ -5,9 +5,19 @@ Positives: one chip per labelable OSM court (outdoor, court-like polygon of
 whole inside the chip.
 
 Negatives (about ``--neg-ratio`` x positives, per state): chips centred on
-hard negatives (tennis and other non-basketball pitches, parking lots, pools)
-and on random points inside parks and schools that are at least
-``--min-court-dist`` metres from any known basketball feature.
+hard negatives (tennis, pickleball, volleyball and other non-basketball
+pitches, parking lots, pools, playgrounds), on random points inside parks,
+schools, residential and apartment landuse that are at least
+``--min-court-dist`` metres from any known basketball feature, and on
+uniformly random land points (``random_land``: farms, forest, roads, roofs;
+what a full, unmasked scan mostly sees). ``--extra-negatives`` adds chips at
+given points (e.g. reviewed false positives of an earlier scan); they always
+go to ``train``.
+
+``--exclude-labels`` lists OSM refs whose polygon is wrong (a pool or parking
+lot tagged basketball, a pickleball block, a shifted polygon; see
+label_clean.py). They are treated like courts we can't box: every chip that
+shows one is dropped.
 
 Labels: every chip, positive or negative, gets a box for **every** labelable
 court whose box intersects it. Boxes are axis-aligned in the chip's pixel
@@ -20,7 +30,8 @@ Chip georeferencing comes from the NAIP catalog's ``proj:transform``, so all
 labels are computed before any imagery is fetched.
 
 Split: chips whose feature is in ``--val-state`` (default TN) form ``val``,
-the honest held-out state. Other chips whose box comes within
+the honest held-out state (never used for model selection: ``data.yaml``
+validates on ``val_us``; ``data_tn.yaml`` is for the final test). Other chips whose box comes within
 ``--holdout-buffer-m`` of that state are dropped so no court appears on both
 sides. A small spatial slice (``--val-us-frac`` of ~5 km cells) of the rest
 becomes ``val_us`` for an in-distribution comparison; everything else is
@@ -74,7 +85,10 @@ log = logging.getLogger("build_dataset_us")
 
 ALBERS = "EPSG:5070"  # CONUS equal-area metres, for distance rules
 DEFAULT_NEG_MIX = "pitch_tennis=0.30,pitch_other=0.10,parking=0.20,pool=0.10,park=0.15,school=0.15"
-RANDOM_POINT_KINDS = {"park", "school"}
+V2_NEG_MIX = ("pitch_tennis=0.22,pitch_pickleball=0.08,pitch_volleyball=0.05,pitch_other=0.05,parking=0.12,pool=0.07,"
+              "playground=0.04,park=0.09,school=0.09,residential=0.07,apartments=0.04,random_land=0.08")
+RANDOM_POINT_KINDS = {"park", "school", "residential", "apartments"}
+SYNTHETIC_KINDS = {"random_land"}  # not from the context layer
 LABEL_MAX_AREA_M2 = 6000.0
 
 
@@ -91,7 +105,7 @@ class CourtLayer:
     tree: STRtree = field(repr=False)
 
 
-def load_court_layer(path: Path, container_max_area_m2: float) -> CourtLayer:
+def load_court_layer(path: Path, container_max_area_m2: float, exclude: set[str] | None = None) -> CourtLayer:
     a, g = read_geoparquet(path, columns=["osm_ref", "state", "center_lon", "center_lat", "area_m2", "geom_kind",
                                           "outdoor", "court_like", "label_ok"])
     outdoor = a["outdoor"].astype(bool)
@@ -105,6 +119,10 @@ def load_court_layer(path: Path, container_max_area_m2: float) -> CourtLayer:
         | (~clike & poly & (area <= container_max_area_m2))   # small park/school "has a court somewhere"
     )
     role = np.where(label, "label", np.where(amb, "ambiguous", "ignore")).astype(object)
+    if exclude:
+        bad = np.isin(a["osm_ref"].astype(str), np.array(sorted(exclude)))
+        role[bad & (role == "label")] = "ambiguous"
+        log.info("excluded %d labels (now ambiguous: chips showing them are dropped)", int(bad.sum()))
     b = shapely.bounds(g)
     lat = a["center_lat"].astype(float)
     half = np.maximum((b[:, 2] - b[:, 0]) * M_PER_DEG_LAT * np.cos(np.radians(lat)), (b[:, 3] - b[:, 1]) * M_PER_DEG_LAT) / 2
@@ -181,19 +199,43 @@ def _random_point_in(geom: Any, rng: random.Random, tries: int = 40) -> tuple[fl
     return None
 
 
+def random_land_points(states: States, state: str, n: int, rng: random.Random) -> tuple[list[float], list[float]]:
+    """Uniform random points inside a state (rejection sampling in its lon/lat bbox, area-weighted by cos(lat))."""
+    geom = states.geometry(state)
+    shapely.prepare(geom)
+    minx, miny, maxx, maxy = geom.bounds
+    cmax = math.cos(math.radians(min(abs(miny), abs(maxy))))
+    lons: list[float] = []
+    lats: list[float] = []
+    tries = 0
+    while len(lons) < n and tries < n * 200:
+        tries += 1
+        x, y = rng.uniform(minx, maxx), rng.uniform(miny, maxy)
+        if rng.random() > math.cos(math.radians(y)) / cmax:
+            continue
+        if shapely.intersects_xy(geom, x, y):
+            lons.append(x)
+            lats.append(y)
+    return lons, lats
+
+
 def plan_negatives(
     context_path: Path, courts: CourtLayer, plan: Plan, pos_per_state: Counter[str], neg_ratio: float,
     mix: dict[str, float], min_court_dist_m: float, hard_min_dist_m: float, seed: int,
+    states: States | None = None,
 ) -> Counter[str]:
     kinds = sorted(mix)
+    ctx_kinds = [k for k in kinds if k not in SYNTHETIC_KINDS]
     a, g = read_geoparquet(context_path, columns=["kind", "osm_type", "osm_id", "state", "center_lon", "center_lat",
-                                                  "area_m2", "geom_kind"], filters=[("kind", "in", kinds)])
+                                                  "area_m2", "geom_kind"], filters=[("kind", "in", ctx_kinds)])
     area = a["area_m2"].astype(float)
     ok = np.ones(len(area), dtype=bool)
-    small_pitch = np.isin(a["kind"], ["pitch_tennis", "pitch_other"]) & ~(area > LABEL_MAX_AREA_M2)
-    ok &= ~np.isin(a["kind"], ["pitch_tennis", "pitch_other"]) | small_pitch
+    pitch_kinds = ["pitch_tennis", "pitch_pickleball", "pitch_volleyball", "pitch_other"]
+    small_pitch = np.isin(a["kind"], pitch_kinds) & ~(area > LABEL_MAX_AREA_M2)
+    ok &= ~np.isin(a["kind"], pitch_kinds) | small_pitch
     ok &= ~((a["kind"] == "parking") & ((area < 150) | (area > 60_000)))
     ok &= ~((a["kind"] == "park") & (area > 5e6))  # skip huge wilderness parks for random points
+    ok &= ~((a["kind"] == "residential") & ((area < 2_000) | (area > 2e7)))
     log.info("context candidates: %s", dict(Counter(a["kind"][ok].tolist())))
 
     court_albers = to_albers(courts.geoms)
@@ -218,7 +260,8 @@ def plan_negatives(
         want = int(round(n_pos * neg_ratio))
         if want <= 0:
             continue
-        avail = {kd: len(by_state_kind.get((st, kd), ())) for kd in kinds}
+        avail = {kd: (10**9 if kd in SYNTHETIC_KINDS and states is not None else len(by_state_kind.get((st, kd), ())))
+                 for kd in kinds}
         quota = {kd: int(round(want * mix[kd])) for kd in kinds}
         # hand the quota of kinds this state lacks to the kinds it has
         short = sum(max(0, quota[kd] - avail[kd]) for kd in kinds)
@@ -235,13 +278,20 @@ def plan_negatives(
                 else:
                     spare.remove(kd)
         for kd in kinds:
-            pool = by_state_kind.get((st, kd))
-            if pool is None or quota[kd] <= 0:
-                continue
-            picks = nrng.choice(pool, min(len(pool), quota[kd] * 2), replace=False)
             lons: list[float] = []
             lats: list[float] = []
             srcs: list[str] = []
+            if kd in SYNTHETIC_KINDS:
+                if states is None or quota[kd] <= 0:
+                    continue
+                lons, lats = random_land_points(states, st, quota[kd] * 2, rng)
+                srcs = ["random"] * len(lons)
+                picks = np.zeros(0, dtype=np.int64)
+            else:
+                pool = by_state_kind.get((st, kd))
+                if pool is None or quota[kd] <= 0:
+                    continue
+                picks = nrng.choice(pool, min(len(pool), quota[kd] * 2), replace=False)
             for i in picks:
                 if kd in RANDOM_POINT_KINDS:
                     pt = _random_point_in(g[i], rng)
@@ -261,7 +311,7 @@ def plan_negatives(
                 continue
             x, y = tr.transform(np.array(lons), np.array(lats))
             pts = shapely.points(x, y)
-            dist = min_court_dist_m if kd in RANDOM_POINT_KINDS else hard_min_dist_m
+            dist = min_court_dist_m if (kd in RANDOM_POINT_KINDS or kd in SYNTHETIC_KINDS) else hard_min_dist_m
             near_i, _ = court_tree.query(pts, predicate="dwithin", distance=dist)
             bad = np.zeros(len(pts), dtype=bool)
             bad[near_i] = True
@@ -346,6 +396,19 @@ def compute_labels(wp: WindowPlan, lons: np.ndarray, lats: np.ndarray, courts: C
     return LabelResult(boxes, refs, ambiguous)
 
 
+def plan_extra_negatives(path: Path, plan: Plan) -> int:
+    """Negatives at given points: CSV with columns lon, lat, state and optional kind, source."""
+    n = 0
+    with open(path, encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            kind = row.get("kind") or "extra"
+            plan.add(f"{row['state']}_xneg_{kind}_{len(plan):07d}", "neg", kind, row["state"], float(row["lon"]),
+                     float(row["lat"]), row.get("source") or "extra")
+            n += 1
+    log.info("extra negatives: %d from %s", n, path)
+    return n
+
+
 def cell_split(lat: float, lon: float, frac: float, seed: int, cell_deg: float = 0.05) -> bool:
     key = f"{seed}:{math.floor(lat / cell_deg)}:{math.floor(lon / cell_deg)}"
     return int(hashlib.md5(key.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF < frac
@@ -397,7 +460,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--val-us-frac", type=float, default=0.02, help="fraction of ~5 km cells outside the val state -> val_us")
     ap.add_argument("--max-positives", type=int, default=0, help="0 = every labelable court")
     ap.add_argument("--neg-ratio", type=float, default=1.0)
-    ap.add_argument("--neg-mix", default=DEFAULT_NEG_MIX)
+    ap.add_argument("--neg-mix", default=DEFAULT_NEG_MIX, help=f"kind=weight,... (v2 used: {V2_NEG_MIX})")
+    ap.add_argument("--exclude-labels", type=Path, help="text file of OSM refs (way/123) whose polygons are wrong")
+    ap.add_argument("--extra-negatives", type=Path, help="CSV lon,lat,state[,kind,source]: extra negative chips (train)")
+    ap.add_argument("--no-osm-samples", action="store_true",
+                    help="plan only --extra-negatives (e.g. a small add-on dataset)")
     ap.add_argument("--min-court-dist", type=float, default=60.0, help="m; park/school random points this far from courts")
     ap.add_argument("--hard-min-dist", type=float, default=20.0, help="m; hard-negative centres this far from courts")
     ap.add_argument("--container-max-area", type=float, default=200_000.0,
@@ -429,11 +496,23 @@ def main(argv: list[str] | None = None) -> None:
         (out / sub).mkdir(parents=True, exist_ok=True)
 
     chip_half_m = args.chip_size * args.gsd / 2
-    courts = load_court_layer(args.courts, args.container_max_area)
+    exclude: set[str] = set()
+    if args.exclude_labels:
+        exclude = {ln.strip() for ln in args.exclude_labels.read_text(encoding="utf-8").splitlines()
+                   if ln.strip() and not ln.startswith("#")}
+    courts = load_court_layer(args.courts, args.container_max_area, exclude)
     plan = Plan()
-    pos_per_state = plan_positives(courts, plan, chip_half_m, args.jitter, args.max_positives, rng)
-    neg_by_kind = plan_negatives(args.context, courts, plan, pos_per_state, args.neg_ratio, parse_mix(args.neg_mix),
-                                 args.min_court_dist, args.hard_min_dist, args.seed)
+    states = States.load(args.states_file)
+    neg_by_kind: Counter[str] = Counter()
+    if not args.no_osm_samples:
+        pos_per_state = plan_positives(courts, plan, chip_half_m, args.jitter, args.max_positives, rng)
+        neg_by_kind = plan_negatives(args.context, courts, plan, pos_per_state, args.neg_ratio, parse_mix(args.neg_mix),
+                                     args.min_court_dist, args.hard_min_dist, args.seed, states)
+    n_extra_start = len(plan)
+    if args.extra_negatives:
+        neg_by_kind["extra"] += plan_extra_negatives(args.extra_negatives, plan)
+    is_extra = np.zeros(len(plan), dtype=bool)
+    is_extra[n_extra_start:] = True
     lons = np.array(plan.lon)
     lats = np.array(plan.lat)
     st = np.array(plan.state, dtype=object)
@@ -456,19 +535,29 @@ def main(argv: list[str] | None = None) -> None:
     keep &= ~lost_target
 
     # held-out state: val; buffer around it dropped from train
-    states = States.load(args.states_file)
     hold = states.geometry(args.val_state)
     hold_buf = shapely.buffer(hold, args.holdout_buffer_m / M_PER_DEG_LAT)
     shapely.prepare(hold_buf)
     in_val = st == args.val_state.upper()
     boxes = lonlat_boxes(lons, lats, chip_half_m)
-    near_hold = ~in_val & shapely.intersects(hold_buf, boxes)
+    near_hold = ~in_val & ~is_extra & shapely.intersects(hold_buf, boxes)
     skipped["near_holdout_border"] = int((near_hold & keep).sum())
     keep &= ~near_hold
-    split = np.where(in_val, "val", "train").astype(object)
-    for i in np.flatnonzero(~in_val):
+    split = np.where(in_val & ~is_extra, "val", "train").astype(object)
+    for i in np.flatnonzero(~in_val & ~is_extra):
         if cell_split(lats[i], lons[i], args.val_us_frac, args.seed):
             split[i] = "val_us"
+    if is_extra.any():
+        # extra negatives always train, but never next to a held-out (val) or val_us chip
+        held = np.flatnonzero(keep & ((split == "val") | (split == "val_us")))
+        if len(held):
+            tree = STRtree(lonlat_boxes(lons[held], lats[held], chip_half_m + 100.0))
+            ei = np.flatnonzero(is_extra & keep)
+            hit, _ = tree.query(boxes[ei], predicate="intersects")
+            near_val = np.zeros(len(ei), dtype=bool)
+            near_val[hit] = True
+            skipped["extra_near_val_chip"] = int(near_val.sum())
+            keep[ei[near_val]] = False
 
     idx = np.flatnonzero(keep)
     if args.pilot and len(idx) > args.pilot:
@@ -552,7 +641,8 @@ def main(argv: list[str] | None = None) -> None:
     stats["naip_years_by_state"] = {s: dict(sorted(c.items())) for s, c in sorted(years_by_state.items())}
     stats["naip_year_used_by_state"] = {s: max(c, key=lambda y: c[y]) for s, c in sorted(years_by_state.items())}
     stats["planned"] = {"chips": n, "positives": int((kind == "pos").sum()), "negatives": int((kind == "neg").sum()),
-                        "negatives_by_kind": dict(neg_by_kind)}
+                        "negatives_by_kind": dict(neg_by_kind), "excluded_labels": len(exclude),
+                        "neg_mix": args.neg_mix, "extra_negatives": int(is_extra.sum())}
     stats["skipped"] = dict(skipped)
     stats["read"] = {"seconds": round(read_s, 1), "chips_per_s": round(len(to_fetch_arr) / max(read_s, 1e-6), 1),
                      "retries": reader.stats.retries, "transform_mismatch": reader.stats.transform_mismatch,
@@ -562,7 +652,11 @@ def main(argv: list[str] | None = None) -> None:
     stats["seconds"] = round(time.monotonic() - t0, 1)
     write_json(out / "stats.json", stats)
     (out / "data.yaml").write_text(
-        f"# Hoop Hunter court detector, nationwide (build_dataset_us); val = held-out {args.val_state}\n"
+        f"# Hoop Hunter court detector, nationwide (build_dataset_us); model selection on val_us (random ~5 km cells\n"
+        f"# outside {args.val_state}); {args.val_state} stays an untouched test set (data_tn.yaml)\n"
+        f"path: {out.resolve().as_posix()}\ntrain: images/train\nval: images/val_us\nnames:\n  0: court\n", encoding="utf-8")
+    (out / "data_tn.yaml").write_text(
+        f"# same dataset, val = held-out {args.val_state} (test only)\n"
         f"path: {out.resolve().as_posix()}\ntrain: images/train\nval: images/val\nnames:\n  0: court\n", encoding="utf-8")
     (out / "data_val_us.yaml").write_text(
         f"# same dataset, val = random ~5 km cells outside {args.val_state}\n"

@@ -25,3 +25,9 @@ cloud/*.tmp
 cloud/logs/
 *.osm.pbf
 *.geojsonseq
+
+# Gold-set labelling page data (images + tasks.js; regenerate with python -m hoop_pipeline.gold export)
+tools/label/data/
+
+# backup of the interrupted v2 run (Oct 2026)
+remote_v2/

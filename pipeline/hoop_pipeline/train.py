@@ -70,7 +70,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cache", choices=["ram", "disk", "none"], default="none")
     ap.add_argument("--fraction", type=float, default=1.0, help="train on this fraction of the train split")
-    ap.add_argument("--no-copy", action="store_true", help="don't copy best.pt to weights/best.pt")
+    ap.add_argument("--no-copy", action="store_true", help="don't copy best.pt to --copy-to")
+    ap.add_argument("--copy-to", type=Path, default=config.DEFAULT_WEIGHTS,
+                    help="where the best checkpoint is copied (default weights/best.pt; v2 used weights/best_v2.pt)")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
                     help="extra Ultralytics train args, e.g. --set deterministic=False close_mosaic=5 (YAML values)")
     add_common_args(ap)
@@ -151,10 +153,10 @@ def main(argv: list[str] | None = None) -> None:
         "trained": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
     if not args.no_copy:
-        config.WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(best, config.DEFAULT_WEIGHTS)
-        write_json(config.DEFAULT_WEIGHTS.with_suffix(".json"), summary)
-        log.info("copied to %s", config.DEFAULT_WEIGHTS)
+        args.copy_to.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(best, args.copy_to)
+        write_json(args.copy_to.with_suffix(".json"), summary)
+        log.info("copied to %s", args.copy_to)
     write_json(Path(trainer.save_dir) / "hoop_summary.json", summary)
 
 

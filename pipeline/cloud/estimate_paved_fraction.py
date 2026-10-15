@@ -86,7 +86,7 @@ def main() -> None:
     shapely.prepare(conus)
     minx, miny, maxx, maxy = conus.bounds
     rng = random.Random(args.seed)
-    pts = []
+    pts: list[tuple[float, float]] = []
     while len(pts) < args.samples:
         x, y = rng.uniform(minx, maxx), rng.uniform(miny, maxy)
         if shapely.intersects_xy(conus, x, y):
@@ -125,11 +125,12 @@ def main() -> None:
     conus_km2 = conus.area / 1e6
     res = {"proxy": f"USDA CDL {args.year} classes 121-124 (NLCD developed), 30 m", "windows": len(rows),
            "window_km": args.win * 0.03, "conus_km2": round(conus_km2), "seconds": round(time.time() - t0, 1)}
-    for k in (4, 10, 11):
-        fr[f"cells_{k * 30}m_touching_buf30"] = np.array([r[f"cells{k}_any"] / max(1, r[f"cells{k}_valid"]) for r in rows])
-    for k, v in fr.items():
+    for cell in (4, 10, 11):
+        fr[f"cells_{cell * 30}m_touching_buf30"] = np.array([r[f"cells{cell}_any"] / max(1, r[f"cells{cell}_valid"])
+                                                            for r in rows])
+    for name, v in fr.items():
         se = v.std(ddof=1) / math.sqrt(len(v))
-        res[k] = {"fraction": round(float(v.mean()), 4), "se": round(float(se), 4),
+        res[name] = {"fraction": round(float(v.mean()), 4), "se": round(float(se), 4),
                   "km2": round(float(v.mean()) * conus_km2), "median_window": round(float(np.median(v)), 4)}
     print(json.dumps(res, indent=1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
