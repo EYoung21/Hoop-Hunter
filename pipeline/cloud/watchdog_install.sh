@@ -54,5 +54,13 @@ chmod 644 /etc/cron.d/hh-watchdog
 # the ubuntu user may set holds (never past the deadline)
 install -d -o ubuntu -g ubuntu -m 755 /home/ubuntu/hh 2>/dev/null || true
 systemctl list-timers hh-watchdog.timer --no-pager | head -3
+systemctl is-active --quiet hh-watchdog.timer || { echo "watchdog: hh-watchdog.timer is not active" >&2; exit 1; }
 "$PY3" /opt/hoophunter/watchdog_instance.py status
+# The watchdog is only useful if its key can reach the API: GET /instances must list this instance and the
+# IP lookup must agree. Fail the install otherwise (launch.sh then terminates the node from this PC).
+"$PY3" /opt/hoophunter/watchdog_instance.py selftest || { echo "watchdog: selftest failed (key or API)" >&2; exit 1; }
+# one real check now, so the log and state file exist before any work starts
+systemctl start hh-watchdog.service || true
+test -s /var/log/hoophunter-watchdog.log || { echo "watchdog: no log written" >&2; exit 1; }
+tail -n 3 /var/log/hoophunter-watchdog.log
 echo "watchdog installed"

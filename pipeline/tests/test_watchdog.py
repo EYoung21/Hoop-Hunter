@@ -59,6 +59,10 @@ class FakeLambda:
                 body = json.loads(self.rfile.read(n) or b"{}")
                 fake.calls.append(("POST", self.path, self.headers.get("Authorization", ""), body))
                 code = fake.terminate_codes.pop(0) if fake.terminate_codes else 200
+                if code == 400:  # what the real API answers for a malformed id (measured 2026-10-15)
+                    self._send(400, {"error": {"code": "global/invalid-parameters",
+                                               "message": "Error in request body at 'instance_ids[0]'"}})
+                    return
                 if code != 200:
                     self._send(code, {"error": {"code": f"http-{code}"}})
                     return
@@ -299,6 +303,30 @@ class InstanceWatchdogTest(unittest.TestCase):
         self.assertEqual(posts[-1][2], "Bearer key-2")
         self.assertIn("real-id", fake.terminated())
 
+    def test_malformed_id_400_is_resolved_by_ip(self) -> None:
+        fake = FakeLambda([inst("real-id", "hh-main", ip="10.0.0.1")])
+        fake.terminate_codes = [400]  # global/invalid-parameters for the configured id
+        try:
+            ok = inst_wd.terminate_self(self.cfg(fake, iid="not-a-uuid", hours=1), sleep=lambda s: None,
+                                        ips=lambda: ["10.0.0.1"])
+        finally:
+            fake.close()
+        self.assertTrue(ok)
+        posts = [c[3]["instance_ids"] for c in fake.calls if c[0] == "POST"]
+        self.assertEqual(posts, [["not-a-uuid"], ["real-id"]])
+
+    def test_selftest(self) -> None:
+        fake = FakeLambda([inst("me", "hh-main", ip="10.0.0.1")])
+        try:
+            good = inst_wd.selftest(self.cfg(fake), ips=lambda: ["10.0.0.1"])
+            stale = inst_wd.selftest(self.cfg(fake, iid="gone"), ips=lambda: ["10.0.0.1"])
+        finally:
+            fake.close()
+        self.assertTrue(good["ok"])
+        self.assertEqual(good["resolved_by_ip"], "me")
+        self.assertFalse(stale["ok"])
+        self.assertEqual([c[0] for c in fake.calls], ["GET"] * 4)  # never terminates
+
     def test_gives_up_after_attempts_and_logs(self) -> None:
         fake = FakeLambda([inst("me", "hh-main")])
         fake.terminate_codes = [500] * 5
@@ -327,6 +355,18 @@ class InstanceWatchdogTest(unittest.TestCase):
         self.assertEqual(cfg.instance_id, "abc")
         self.assertEqual(cfg.idle_minutes, 45.0)
         self.assertEqual(cfg.deadline, dt.datetime(2026, 10, 15, 18, 0, tzinfo=UTC))
+
+
+class LastRunOutputTest(unittest.TestCase):
+    def test_no_carriage_returns(self) -> None:
+        """launch.sh reads lastrun.py output with $(...); a CR from Windows' CRLF ended up in the instance name
+        and Lambda rejected the launch ("Invalid JSON request data", 2026-10-15)."""
+        import subprocess
+
+        out = subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "cloud" / "lastrun.py"),
+                              "deadline", "--max-hours", "1"], capture_output=True, check=True).stdout
+        self.assertNotIn(b"\r", out)
+        self.assertRegex(out.decode(), r"^\S+ x\d{10}\n$")
 
 
 if __name__ == "__main__":

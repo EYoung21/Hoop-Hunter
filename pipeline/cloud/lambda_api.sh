@@ -58,8 +58,9 @@ check_key() {  # the key works iff GET /instance-types answers 200; run before e
   echo "API key OK (GET /instance-types -> 200)"
 }
 
-lastrun() { "$PY" "$CLOUD_DIR/lastrun.py" "$@"; }
-json_field() { "$PY" "$CLOUD_DIR/lastrun.py" field "$1"; }   # stdin JSON -> dotted field
+# tr -d '\r': Windows Python writes CRLF, and a CR left in $(...) breaks names (invalid JSON), ids, IPs and URLs
+lastrun() { "$PY" "$CLOUD_DIR/lastrun.py" "$@" | tr -d '\r'; }
+json_field() { "$PY" "$CLOUD_DIR/lastrun.py" field "$1" | tr -d '\r'; }   # stdin JSON -> dotted field
 
 hh_ip() { lastrun get "${1:-$HH_NODE}" ip; }
 hh_ssh() { ssh "${SSH_OPTS[@]}" "ubuntu@$(hh_ip)" "$@"; }

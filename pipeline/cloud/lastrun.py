@@ -146,6 +146,10 @@ def parse_pairs(pairs: list[str]) -> dict[str, Any]:
 
 
 def main() -> None:
+    # The shell scripts read this output with $(...) / read, which keep a '\r': on Windows Python would write
+    # CRLF and put a raw CR into instance names (Lambda: "Invalid JSON request data"), ids and IPs.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(newline="\n")
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     n = sub.add_parser("new-run")

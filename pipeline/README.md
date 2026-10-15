@@ -65,6 +65,7 @@ latest NAIP is **2023-04-11, 0.6 m** (Tennessee; Georgia's 2023 flight was
 | Overture Maps places, release 2026-09-23.1 | places of worship, community/civic centres, youth organisations, parks, schools, colleges, sports complexes, YMCAs and rec centres (name match) for the privacy filter | **CDLA-Permissive-2.0 and Apache-2.0** (verified 2026-10-09 at docs.overturemaps.org/guides/places: "published under the CDLA Permissive 2.0 and Apache 2.0 licenses... contains no OpenStreetMap data"). Foursquare-sourced rows are Apache-2.0 (NOTICE: opensource.foursquare.com/places-notice-txt); some rows CC0 (AllThePlaces). Only used inside the pipeline: the app gets a derived `site` word, not Overture records. |
 | Overture Maps buildings, release 2026-09-23.1 | building footprints around candidates (house-sized vs large buildings) for the privacy filter | **ODbL 1.0** (includes OSM). Only used inside the pipeline. |
 | NYC Parks basketball courts (`../assets/NYCcourts.json`) | `source: "nyc_parks"` entries | NYC Open Data, free to use under the NYC Open Data terms of use. |
+| 29 official city / county / state court inventories plus Overture `basketball_court` places (`truth_sources.json`) | the independent truth set (`truth`); evaluation only, nothing goes to the app | Per source: CC0, PDDL, CC BY 3.0/4.0, ODbL (Cleveland), Public Domain, or open-data terms without a named license. Every license is quoted in `truth_sources.json`; see [Official court truth set](#official-court-truth-set-truth-2026-10-15). |
 | Ultralytics YOLO | detector training and inference | **AGPL-3.0.** Using it in this offline pipeline is fine. The app only ships the GeoJSON it produces, not the model or code. If you ever ship the model inside an app or service, check AGPL obligations or get an Ultralytics Enterprise license. |
 
 Detected candidates are machine-generated from public-domain imagery and are
@@ -1554,6 +1555,314 @@ python -m hoop_pipeline.export_app --osm data/osm_us/courts_TN.geojson --region-
 * **IDs.** 79 of the 131 detected ids are run 1's ids, reused because they are within 15 m, so app
   review decisions carry over. The `confidence` shown is v1's, from 0.42 to 0.81.
 
+## Official court truth set (`truth`, 2026-10-15)
+
+OSM misses many courts, so scoring the detector against OSM counts real unmapped finds as errors.
+Google Maps can't be used: its terms forbid copying its data. `hoop_pipeline/truth.py` builds an
+independent reference set from official, openly licensed park-department, county and state inventories.
+The registry `truth_sources.json` holds, per source: the endpoint, the basketball filter, the field
+mapping, the quoted license, the coverage layer and the location precision. Everything runs on CPU;
+downloads are small (about 20 MB in total).
+
+```bash
+python -m hoop_pipeline.truth refresh                 # download all enabled sources + coverage polygons, then build
+python -m hoop_pipeline.truth build                   # re-normalise data/truth/raw/ without network
+python -m hoop_pipeline.truth list                    # registry + manifest summary
+python -m hoop_pipeline.truth osm-compare             # share of official courts OSM already has (40 m)
+python -m hoop_pipeline.truth evaluate --candidates out/scan2_tn_v1/detections.parquet
+python -m hoop_pipeline.truth evaluate --candidates all.parquet --scanned-area scanned.geojson --min-area 150
+python -m hoop_pipeline.truth evaluate --candidates all.parquet --only-not-in-osm   # courts never used as positives
+python -m hoop_pipeline.truth export-labels [--min-area 150]   # official courts OSM lacks -> candidate positives
+python -m hoop_pipeline.truth chips --sources denver_dpr --only-unmatched --per-source 8   # NAIP spot checks
+python -m unittest tests.test_truth -v
+```
+
+### Outputs (`data/truth/`, git-ignored)
+
+* **`courts_truth.parquet`** (GeoParquet, point geometry, EPSG:4326). One row per official record:
+  * ids and place: `truth_id`, `source`, `source_id`, `city`, `state`
+  * names: `name`, `park_name` (filled from the coverage polygon when the source has none), `park_ref`
+  * counts: `courts` (only when the source gives a count), `full_half`
+  * flags:
+    * `indoor`: `outdoor` / `indoor` / `covered` (roofed or fully shaded) / `unknown`
+    * `status`: `active` / `closed` / `inactive` / `unknown`; removed courts are dropped
+    * `feature`: `court`, or `hoop` for Chicago's backboards
+    * `public`: null for planimetric layers, which include private pads
+    * `tier`: `official` / `weak`
+  * location: `precision`, `coverage_id`, `same_xy` (records sharing one coordinate), `lon`, `lat`
+  * geometry: `area_m2` and `footprint_wkb` (the court polygon for `court_polygon` sources)
+  * `attrs`: selected raw attributes as JSON
+* **`coverage.parquet`**: the polygons each source is complete for (`coverage_id`, `source`, `name`, `kind`).
+  `kind` is `park` (the agency's park polygons), `city` or `county`.
+* **`sources.json`** (manifest): per source, the URL, quoted license, attribution, fetch time and source edit
+  date, raw/kept/removed counts, court sum, coverage polygons and km², rows inside coverage, and the OSM
+  comparison.
+* **`osm_match.parquet` / `osm_compare.json`**: the nearest OSM court for every row, and the per-source summary.
+* **`new_positive_candidates.geojson`**: official court-level records with no OSM basketball feature within
+  40 m. These are candidate extra training positives (980; 493 with `--min-area 150`). They are not snapped
+  yet: each must be snapped to a visible court box on NAIP before it is used as a label.
+
+How each command works:
+
+* **Matching.** A court-level row matches a detection within 40 m of its point, or within 15 m of its court
+  polygon. A `park_point` row matches any detection inside its park polygon, or within 250 m when there is
+  no polygon. Park-point rows are reported separately as "park-level" recall.
+* **`evaluate`:**
+  * It restricts the truth to the candidates' states, or to `--scanned-area`.
+  * It drops `indoor` and `covered` rows.
+  * It reports recall at each confidence threshold.
+  * For every source with park coverage, it also reports the share of detections inside the covered parks
+    that match an official court. Unmatched in-park detections are false positives or courts the agency
+    doesn't list, so the share is a lower bound on in-park precision.
+* **`--only-not-in-osm`** keeps only courts OSM lacks. Outside Tennessee, every OSM court was a training
+  positive, so this is the subset the model never saw labelled.
+
+### Sources (contiguous US, fetched 2026-10-15)
+
+29 official sources are enabled. They hold **6,201 official records**, of which **5,216 are live courts
+visible from above** (about 5,730 courts). Of those, 4,232 records (about 4,330 courts) are located at the
+court, and 984 park records (about 1,400 courts) are located at the park. Chicago's 771 backboards, 198
+inactive courts (196 NYC, 2 San Jose) and 16 roofed courts are kept but not scored.
+
+`tier=weak` adds Overture `basketball_court` places (1,281 CONUS rows). Under "License" below:
+
+* **open** means an explicit open license or public-domain dedication.
+* **terms** means the portal's open-data terms allow reuse but name no standard license.
+
+| key | publisher | records (courts) | precision | license | coverage | updated |
+|---|---|---|---|---|---|---|
+| `nyc_parks` | NYC Parks, Athletic Facilities (qnem-b8re) | 1,954 polygons (1,758 active/closed) | court_polygon | open: NYC Admin. Code 23-502(d), "without any ... restrictions on their use" | 2,061 NYC Parks properties; likely complete for Parks property | 2026-07-23 |
+| `chicago_parks` | Chicago Park District, CPD_Facilities | 323 courts + 771 backboards | court_point | open: Public Domain | 617 CPD parks; "as of Nov 2016", **stale** | 2022-05 |
+| `seattle_spr` | Seattle Parks & Rec, Basketball Court Polygons | 83 | court_polygon | terms: disclaimer only; city portal labels its own data Public Domain | 492 SPR parks; likely | 2026-10-12 |
+| `boston_bprd` | Boston Parks & Rec, Park Features | 135 | court_point | open: PDDL | BPRD open space | 2026-07 |
+| `dc_planimetrics` | DC OCTO planimetrics, FEATURECODE 3110 | 411 (224 at least 150 m²) | court_polygon, **every owner** | open: CC BY 4.0 | whole District | 2025 capture |
+| `pittsburgh_courts` | Pittsburgh DPW via WPRDC | 105 | court_polygon | open: CC BY | city parks; **stale 2021** | 2022-12 |
+| `cambridge_sports_areas` | Cambridge GIS planimetrics | 28 (some multi-court slabs) | court_polygon, every owner | open: PDDL | whole city; April 2018 flyover | 2023-11 |
+| `syracuse_courts` | Syracuse Parks | 32 (47 courts) | feature_point | terms (attribution; don't redistribute modified copies) | 27 city parks | 2024-08 |
+| `ma_dcr_courts` | Massachusetts DCR, Hard Courts | 51 (66) | feature_point, centre of a court area | terms: "Permission is granted to copy and use" | DCR properties | 2026-10 |
+| `ri_scorp` | RI DEM / RIGIS, SCORP Inventory 2024 | 195 facilities (260) | park_point | terms: RIGIS agreement | statewide public facilities incl. schools | 2024-12 |
+| `columbus_crpd` | Columbus Rec & Parks | 108 | court_point | open: CC0 | 546 CRPD properties | 2024-01 |
+| `cleveland_parks` | Cleveland Park Amenities | 92 | court_point | open: **ODbL** (share-alike) | 160 parks | 2026-06 |
+| `sioux_falls_parks` | Sioux Falls Park Amenities | 32 | court_point | open: CC BY 4.0 | 109 public parks | 2025-04 |
+| `ramsey_county_planimetrics` | Ramsey County MN, Recreation Structures | 353 (190 at least 150 m²) | court_polygon, **every owner** | terms: use constraints "None" | whole county (St Paul + suburbs) | 2024 aerials |
+| `sf_rpd` | SF Rec & Park, Functional Areas | 103 | court_polygon | open: PDDL | 255 RPD properties | 2026-10-15 |
+| `san_jose_prns` | San Jose PRNS, Park Amenities | 85 (about 97; slabs carry QUANTITY) | court_polygon | open: CC BY | 613 parks | 2026-02 |
+| `la_county_parks` | LA County DPR, Countywide Parks and Open Space | 618 parks (940 courts) | park_point | terms: eGIS license to "copy, publish, distribute ... adapt ... exploit" | 1,563 inventoried parks, all agencies incl. City of LA; 2016 counts | 2026-02 |
+| `santa_ana_parks` | Santa Ana Open Space | 20 parks (48) | park_point | open: PDDL | city parks; **2017** | 2017-04 |
+| `denver_dpr` | Denver Parks & Rec, Court Surfaces | 107 | court_polygon | open: CC BY 3.0 | 376 parks | 2026-10-09 |
+| `austin_apr` | Austin Parks & Rec, facility points | 72 (66 visible) | court_point | terms: portal says public domain (GeoHub only disclaims) | 370 parks | 2026-10-05 |
+| `phoenix_pard` | Phoenix Parks & Rec, ParksOpenData/0 | 155 | court_point | terms: revocable licence to use, reproduce and redistribute | 254 parks | 2026-10-15 |
+| `college_station_parks` | College Station Parks, Sport Court | 29 (22 visible) | court_polygon | open: CC BY 4.0 | 84 parks | 2026-04 |
+| `tempe_courts` | Tempe, Courts (Park App) | 33 (39) | court_polygon | open: CC BY 4.0 | 81 parks; partial; **2022** | 2022-06 |
+| `okc_parks` | Oklahoma City Parks, Recreation_Parks/0 | 51 (52) | court_point | terms: open-data policy, "no restrictions on use or reuse" | 169 parks; partial | 2026-10 |
+| `boulder_parks` | Boulder Parks, Park Sites | 11 parks (about 11) | park_point | open: CC0 | 104 park sites | 2023-11 |
+| `nashville_metro_parks` | Metro Nashville Parks, Park Features | 43 (76, from hoop counts) | court_point | terms: Executive Order FO018 ("informational purposes") | 130 Metro parks | 2026-10-15 |
+| `raleigh_prcr` | Raleigh PRCR, Athletic Courts | 61 | court_polygon (see precision) | terms: revocable | 205 parks | 2026-09-16 |
+| `brec_parks` | BREC (Baton Rouge), Park Amenities | 86 parks | park_point | open: Public Domain | 174 BREC parks | 2026-09-07 |
+| `lexington_parks` | Lexington-Fayette, Park Locations | 54 parks | park_point | terms: LFUCG terms of use | none | 2026-05 |
+| `overture_places` (weak) | Overture places 2026-09-23.1 | 1,281 | feature_point | open: CDLA-Permissive-2.0 / Apache-2.0 | none (named places only) | 2026-09 |
+
+**Found but not used.** The license is unclear, restrictive, or only a disclaimer. Ask the agency before
+using these. The full list and reasons are in the survey notes.
+
+* Montgomery Parks MD: 224 court polygons, disclaimer only.
+* Baltimore BCRP: 129 points.
+* Arlington VA: 79 points, "not considered in the Public Domain".
+* Fairfax County planimetrics: 1,629 polygons, internal or personal use only.
+* Madison WI: 148 points.
+* Portland PP&R: 82 points.
+* Sacramento: 93 points.
+* Mecklenburg County: 127 points.
+* BREC court points: 182.
+* Tucson: 69 polygons.
+* Boise: 28 polygons.
+* Tacoma: 30 polygons.
+* Eugene: 33 polygons.
+* Oakland: 43 polygons.
+* Florida FORI: 2,697 sites / 4,958 courts, statewide. It is in the registry with `"enabled": false`.
+* Tennessee Statewide Recreation Areas: 445 parks / 587 courts. Also in the registry with `"enabled": false`.
+
+These cities publish **no** usable official court layer: City of Los Angeles (only LA County's park counts),
+Philadelphia (tennis only), Houston, Dallas, San Antonio, Minneapolis, Indianapolis, Kansas City, St Louis,
+Milwaukee, Knoxville (KGIS needs credentials), Memphis, Chattanooga (only internal hoop points for a few
+parks) and Atlanta (park-level counts, no license). Maryland "Sport Venues - Basketball" is 94 tourism
+venues, mostly indoor arenas.
+
+Two other sources were checked and not used:
+
+* **Foursquare OS Places** is Apache-2.0, but since 2025 it is a gated Hugging Face dataset that needs an
+  account and accepting its terms. The public S3 bucket is empty. Overture already contains the
+  Foursquare-sourced rows.
+* **Recreation.gov RIDB and NPS** have essentially no basketball courts.
+
+### Location precision (NAIP 0.6 m spot checks, `truth chips`)
+
+* **On the court:**
+  * Polygons drawn on the court: NYC, Seattle, SF, San Jose, Denver, Pittsburgh, College Station, Tempe,
+    DC and Ramsey.
+  * Points on the court: Chicago (92% fall inside an OSM court polygon), Boston, Columbus, Cleveland,
+    Phoenix, Sioux Falls and OKC.
+  * In these sources a matched court's median distance to OSM is 0–2 m, and courts in the same park are
+    about 15–20 m apart.
+* **One record, several courts:** San Jose, Tempe and Cambridge polygons can cover multi-court slabs.
+  Nashville, OKC and Syracuse points can be multi-court pads. Use `courts`.
+* **Austin:** points are on the court. Six records sit under full shade roofs or full tree canopy, and are
+  marked `indoor=covered` from `DESCRIPTION`.
+* **Raleigh:** polygons are court-sized, but in the NC 2022 NAIP several unmatched ones sit in forest or
+  on empty lots, with no court visible. Treat Raleigh as unverified.
+* **Nashville:** some unmatched points are unmarked slabs, and one is in woods.
+* **MA DCR:** points are the approximate centre of a hard-court area, about 30–50 m off.
+* **Syracuse:** one point per park and court size.
+* **Park-level points (`park_point`):** LA County, Santa Ana, Boulder, RI SCORP, BREC and Lexington.
+  * The point is a park centroid or a geocoded address, 50–300 m from the court. Only park-level recall
+    is meaningful.
+  * BREC's points are often street addresses outside the park polygon: 79 of 86 fall inside.
+* **Planimetric layers (DC, Ramsey, Cambridge):** every visible court is traced, whoever owns it. That
+  includes backyard pads, rooftop courts and half-court keys of 16–100 m².
+  * Use `--min-area 150` to compare with park-scale courts.
+  * `public` is null for these rows.
+
+### OSM coverage of official courts (`osm-compare`, 40 m)
+
+These are live, visible courts. "Same park" means an OSM basketball feature in the same park polygon.
+
+| source | records | in OSM | share | same park |
+|---|---|---|---|---|
+| phoenix_pard | 155 | 152 | 0.98 | 0.99 |
+| san_jose_prns | 83 | 81 | 0.98 | 0.98 |
+| sf_rpd | 103 | 100 | 0.97 | 0.97 |
+| cleveland_parks | 92 | 87 | 0.95 | 0.95 |
+| chicago_parks | 323 | 302 | 0.94 | 0.94 |
+| seattle_spr | 83 | 77 | 0.93 | 0.93 |
+| college_station_parks | 22 | 19 | 0.86 | 0.86 |
+| tempe_courts | 33 | 28 | 0.85 | 0.85 |
+| boston_bprd | 135 | 113 | 0.84 | 0.85 |
+| pittsburgh_courts | 105 | 88 | 0.84 | 0.86 |
+| sioux_falls_parks | 32 | 27 | 0.84 | 0.88 |
+| syracuse_courts | 31 | 26 | 0.84 | n/a |
+| nyc_parks | 1,758 | 1,459 | 0.83 | 0.86 |
+| columbus_crpd | 108 | 89 | 0.82 | 0.87 |
+| denver_dpr | 107 | 88 | 0.82 | 0.82 |
+| okc_parks | 51 | 42 | 0.82 | 0.86 |
+| austin_apr | 66 | 50 | 0.76 | 0.80 |
+| cambridge_sports_areas | 28 (25 at least 150 m²) | 20 | 0.71 (0.80) | 0.79 |
+| nashville_metro_parks | 43 | 29 | 0.67 | 0.67 |
+| ma_dcr_courts | 51 | 33 | 0.65 | n/a |
+| raleigh_prcr | 59 | 30 | 0.51 | 0.51 |
+| dc_planimetrics | 411 (224 at least 150 m²) | 158 | 0.38 (0.68) | n/a |
+| ramsey_county_planimetrics | 353 (190 at least 150 m²) | 128 | 0.36 (0.60) | n/a |
+| la_county_parks (park-level) | 618 parks | | | 0.75 |
+| santa_ana_parks (park-level) | 20 | | | 0.80 |
+| ri_scorp (park-level, 250 m) | 195 | | | 0.64 |
+| lexington_parks (park-level, 250 m) | 54 | | | 0.63 |
+| brec_parks (park-level) | 86 | | | 0.34 |
+| boulder_parks (park-level) | 11 | | | 0.91 |
+| **all official, court-level** | **4,232** | **3,226** | **0.76** | 0.80 |
+| overture_places (weak) | 1,281 | 335 | 0.26 | n/a |
+
+What the comparison shows:
+
+* **Park courts are well mapped.** In big-city parks OSM already has 82–98% of the official courts.
+* **The gap is outside parks.** OSM is missing most of the courts that only all-owner planimetrics see:
+  schools, apartments and homes. That is 32% of DC's and 40% of Ramsey's courts of at least 150 m².
+  Smaller park systems (Baton Rouge, Nashville, Raleigh) are also patchy.
+* **Many unmatched park records aren't courts you can see.** On NAIP they are roofs, canopy, empty lots
+  or stale records (Austin, Raleigh, Nashville). So "official minus OSM" is not automatically a list of
+  missing courts.
+
+### National scan evaluation (snapshot 2026-10-15 18:00 EDT)
+
+**Input.** The input is the per-item results in `data/scan2/US/results/<ST>/*.parquet` (read-only).
+
+* Only items with a `.done.json` were used: 280,217 detections at `conf` 0.10 or higher.
+* The scanned area is the union of the plan zones of those done items, passed as `--scanned-area`.
+* Complete states: **CA, MT, NM, NV, TN, TX**.
+* Partial states, by share of items done: AZ 90%, CO 91%, WY 83%, OR 55%, MN 43%, UT 25%. Only truth
+  inside the done zones is scored.
+* Not yet scored: ID, KS, ND, NE and SD had started but were not used. No truth source there anyway,
+  except Sioux Falls in SD.
+
+Recall (court match within 40 m of a point, or 15 m of a polygon):
+
+| source | records | 0.10 | 0.25 | 0.40 | 0.50 | 0.60 | 0.70 |
+|---|---|---|---|---|---|---|---|
+| sf_rpd (polygons at least 150 m²) | 92 | 0.96 | 0.96 | 0.95 | 0.94 | 0.87 | 0.74 |
+| san_jose_prns (at least 150 m²) | 78 | 0.97 | 0.96 | 0.94 | 0.94 | 0.89 | 0.67 |
+| phoenix_pard (AZ partial) | 129 | 0.94 | 0.91 | 0.90 | 0.87 | 0.80 | 0.69 |
+| tempe_courts | 20 | 0.95 | 0.95 | 0.95 | 0.90 | 0.90 | 0.85 |
+| college_station_parks | 22 | 0.86 | 0.86 | 0.86 | 0.86 | 0.86 | 0.77 |
+| nashville_metro_parks (TN, held out) | 43 | 0.88 | 0.88 | 0.86 | 0.77 | 0.72 | 0.58 |
+| denver_dpr (CO partial, at least 150 m²) | 97 | 0.82 | 0.78 | 0.72 | 0.70 | 0.62 | 0.43 |
+| austin_apr | 66 | 0.80 | 0.77 | 0.71 | 0.65 | 0.58 | 0.50 |
+| ramsey_county_planimetrics (MN partial, at least 150 m²) | 62 | 0.79 | 0.71 | 0.66 | 0.63 | 0.56 | 0.31 |
+| **all court-level (at least 150 m²)** | **609** | **0.89** | **0.86** | **0.84** | **0.81** | **0.74** | **0.59** |
+| la_county_parks (park-level) | 618 parks | 0.87 | 0.85 | 0.83 | 0.78 | 0.73 | 0.61 |
+| santa_ana_parks (park-level) | 20 | 1.00 | 0.95 | 0.90 | 0.90 | 0.85 | 0.60 |
+| boulder_parks (park-level) | 11 | 0.82 | 0.82 | 0.82 | 0.82 | 0.73 | 0.55 |
+| overture_places (weak; mostly indoor gyms) | 350 | 0.22 | 0.22 | 0.21 | 0.20 | 0.19 | 0.15 |
+
+Results:
+
+* **Courts OSM lacks.** On these 86 court-level records (`--only-not-in-osm`), recall falls to 0.62 at 0.10
+  and 0.49 at 0.5. They were never positives in training, so this is the honest number, but it is pulled
+  down by records that aren't visible courts (see precision above).
+* **Detections inside covered parks** that match an official court, at conf 0.5: Phoenix 110/110, Tempe
+  20/20, College Station 19/19, SF 87/91, Denver 67/70, San Jose 98/108, Austin 42/47, Nashville 32/37.
+  At conf 0.10 the shares fall to 54/102 (Austin) and 109/138 (San Jose).
+* **Tennessee v1 scan.** The v1 every-pixel TN scan (`out/scan2_tn_v1/detections.parquet`) scores 0.79 on
+  Nashville at 0.5, with 32/36 in-park detections matching.
+
+Results are in `data/truth/eval_national_20261015/`: `eval_national_{official,minarea150,notinosm,weak}.json`,
+`eval_tn_v1.json`, `scanned_area.geojson`, and the done-item lists. To redo the evaluation, run its two
+scripts: `scripts/concat_national.py` concatenates the done items' parquets, and `scripts/scanned_area.py`
+unions the same items' `plan.parquet` `zone_wkb` (EPSG:5070).
+
+### Which cities make an honest test set
+
+**Recommended:**
+
+* **Tennessee.** It was held out of training entirely. The only open court-level TN source is Nashville,
+  with 43 records.
+* **Courts OSM lacks** (`--only-not-in-osm`), in sources whose geometry is on the court:
+  * Denver (19 such records, 17 of at least 150 m²)
+  * NYC (296; 154 of at least 150 m²)
+  * DC planimetrics (72 of at least 150 m²)
+  * Ramsey County (76 of at least 150 m²)
+  * Boston (22)
+  * Columbus (19)
+  * Chicago (21)
+  * Pittsburgh (14)
+
+  Review them with `truth chips --only-unmatched` first, and drop records with no visible court.
+* **For all-owner recall:** DC and Ramsey County planimetrics with `--min-area 150`. They are the only
+  sets that include school, apartment and home courts, which is what the national scan actually finds.
+
+**Optimistic:** courts outside Tennessee that OSM already has (Phoenix, SF, San Jose, Chicago, Seattle,
+Cleveland). They were training positives. Use them to check that the pipeline runs and that positions
+match, not to measure generalisation.
+
+**Not recommended** as the main test: Raleigh and Austin (many records not visible), stale sources
+(Chicago 2016, Pittsburgh 2021, Tempe 2022, Santa Ana 2017), and park-level sources.
+
+### Caveats
+
+* **Licenses.**
+  * "terms" sources have no standard license. Phoenix and Raleigh terms are revocable, and Nashville's
+    say "informational purposes". The registry keeps each quote.
+  * Cleveland is ODbL: a published derivative must stay ODbL.
+  * Syracuse asks that modified copies not be redistributed.
+  * The truth files are for internal evaluation. Don't ship them in the app.
+* **Stale data.** Official inventories can be out of date. Chicago is from Nov 2016 and Pittsburgh from
+  2021. NAIP dates from 2021–2023, so built, removed or resurfaced courts disagree in both directions.
+* **What park sources cover.** Park-department layers cover only that agency's parks, not schools, housing
+  authorities or private courts. So the "in covered parks" match share is a lower bound on precision, and
+  recall over a whole city can't come from them.
+* **Duplicates.** Nothing is deduplicated across sources. The overlaps are:
+  * Boston BPRD vs MA DCR (different owners)
+  * Ramsey County, which already contains Saint Paul's courts
+  * LA County vs Santa Ana (no overlap)
+* **Precision classes** were spot-checked on a few NAIP chips per source, not exhaustively.
+
 ## Limits (read before trusting a candidate)
 
 * **Painted courts and blacktops are detectable at 0.6 m; single hoops mostly
@@ -1669,7 +1978,9 @@ pipeline/
     privacy.py       privacy class + site type per candidate / OSM court; OSM-labelled context crops
     gold.py          stratified CONUS gold set: sample / fetch / annotate / export / score
     rescore.py       second opinion on scan candidates from fresh NAIP chips: v2, verifier, context CNN (CPU ok)
+    truth.py         official court truth set: refresh / build / osm-compare / evaluate / export-labels / chips
     wkb_curves.py    linearise curve geometries (PAD-US) for shapely
+  truth_sources.json registry of official court sources (endpoint, filter, fields, license quote, coverage, precision)
   tools/label/
     index.html       keyboard-driven gold-set labelling page (data/ is git-ignored)
   cloud/
@@ -1684,5 +1995,6 @@ pipeline/
     last_run.json  (git-ignored: every instance of the current run, times, cost; previous runs archived inside)
   tests/
     test_watchdog.py both watchdogs against a fake Lambda API (python -m unittest discover -s tests)
+    test_truth.py    truth filters, Esri geometry conversion, build + evaluate on synthetic data (offline)
   data/ datasets/ runs/ weights/ out/ .ultralytics/ tools/label/data/ remote_v2/   (git-ignored, regenerable)
 ```

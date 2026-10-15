@@ -1,0 +1,1697 @@
+{
+ "about": "Registry of official basketball-court sources for hoop_pipeline.truth. Each entry: api (arcgis | socrata | file | overture_local), select (client-side filter), fields (mapping), precision (court_polygon | court_point | feature_point | park_point), coverage (polygons the source is complete for), license (verified text). See README 'Official court truth set'.",
+ "sources": [
+  {
+   "key": "nyc_parks",
+   "name": "Athletic Facilities (NYC Parks)",
+   "publisher": "NYC Department of Parks and Recreation",
+   "city": "New York",
+   "state": "NY",
+   "landing_url": "https://data.cityofnewyork.us/d/qnem-b8re",
+   "api": {
+    "kind": "socrata",
+    "domain": "data.cityofnewyork.us",
+    "id": "qnem-b8re",
+    "where": "primary_sport='BKB' AND featurestatus in('Active','Closed Temporarily','Inactive')"
+   },
+   "fields": {
+    "source_id": "system",
+    "park_ref": "gispropnum",
+    "full_half": "dimensions",
+    "status": {
+     "field": "featurestatus",
+     "map": {
+      "Active": "active",
+      "Closed Temporarily": "closed",
+      "Inactive": "inactive",
+      "Removed": "removed"
+     }
+    },
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "system",
+     "gispropnum",
+     "dimensions",
+     "surface_type",
+     "field_lighted",
+     "featurestatus",
+     "starea"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "NYC Open Data terms (NYC Admin. Code 23-502(d))",
+    "url": "https://nycadmincode.readthedocs.io/t23/c05/index.html",
+    "quote": "Public data sets ... shall be made available without any registration requirement, license requirement or restrictions on their use (NYC Admin. Code 23-502(d)); the City may require third parties to identify the source and version of the data set and describe modifications.",
+    "status": "verified_open"
+   },
+   "attribution": "Source: NYC Parks, Athletic Facilities (NYC Open Data qnem-b8re), filtered to basketball courts and reduced to points",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: every permit-able or sports-designated basketball court on NYC Parks property (CEMS inventory). Not included: NYCHA, DOE schoolyards that are not jointly operated, private courts.",
+    "layer": {
+     "kind": "socrata",
+     "domain": "data.cityofnewyork.us",
+     "id": "enfh-gkve",
+     "id_field": "gispropnum",
+     "name_field": "signname"
+    },
+    "description": "NYC Parks Properties (enfh-gkve), 2,061 properties"
+   },
+   "notes": "The basketball checkbox is unreliable (524 primary_sport=BKB courts have it false), so selection uses primary_sport. 'Inactive' courts are kept with status inactive (often still visible); 'Removed' are dropped. One polygon per court (Full Court / Half Court)."
+  },
+  {
+   "key": "seattle_spr",
+   "name": "Basketball Court Polygons (Seattle Parks and Recreation)",
+   "publisher": "Seattle Parks and Recreation",
+   "city": "Seattle",
+   "state": "WA",
+   "landing_url": "https://data-seattlecitygis.opendata.arcgis.com/datasets/SeattleCityGIS::basketball-court-polygons",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/ZOyb2t4B0UYuYNYH/arcgis/rest/services/Basketball_Court_Polygons/FeatureServer/0",
+    "where": "SPORT_TYPE = 'Basketball'"
+   },
+   "fields": {
+    "source_id": "GLOBALID",
+    "park_ref": "PMAID",
+    "full_half": "COURT_SIZE",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "COURT_ID",
+     "FACILITY_ID",
+     "PMAID",
+     "COURT_SIZE",
+     "GIS_EDT_DT"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "City of Seattle open data (no named license on this layer)",
+    "url": "https://www.seattle.gov/tech/reports-and-data/open-data",
+    "quote": "Item licenseInfo: 'The City of Seattle makes no representation or warranty as to its accuracy, and in particular, its accuracy as to labeling, dimensions, contours, property boundaries, or placement or location of any map feature thereof.' Executive Order 2016-01 orders City data to be 'open by preference'; the city's native Socrata datasets (e.g. Park Features By PMAID, xrnu-8eiq) are labelled 'Public Domain'.",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "City of Seattle, Seattle Parks and Recreation",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: outdoor courts maintained by SPR (DPR.Sport_Court_OLN where SPORT_TYPE='Basketball'). Schools, SHA housing and private courts are not included. The companion points layer lists 109 courts at 66 parks, the polygons 83 courts.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/ZOyb2t4B0UYuYNYH/arcgis/rest/services/Park_Boundary_(outline)/FeatureServer/1",
+     "where": "1=1",
+     "id_field": "PMA",
+     "name_field": "NAME"
+    },
+    "description": "SPR park boundaries (outline), 512 parks"
+   },
+   "notes": "Refreshed weekly by SPR. 43 half and 40 full courts; median polygon 216 m2."
+  },
+  {
+   "key": "chicago_parks",
+   "name": "CPD_Facilities (Chicago Park District)",
+   "publisher": "Chicago Park District",
+   "city": "Chicago",
+   "state": "IL",
+   "landing_url": "https://data.cityofchicago.org/d/eix4-gf83",
+   "api": {
+    "kind": "socrata",
+    "domain": "data.cityofchicago.org",
+    "id": "eix4-gf83",
+    "where": "facility_n in('BASKETBALL COURT','BASKETBALL BACKBOARD')"
+   },
+   "fields": {
+    "source_id": [
+     "objectid_1",
+     "gisobjid"
+    ],
+    "park_name": "park",
+    "park_ref": "park_no",
+    "feature": {
+     "field": "facility_n",
+     "map": {
+      "BASKETBALL COURT": "court",
+      "BASKETBALL BACKBOARD": "hoop"
+     },
+     "default": "drop"
+    },
+    "indoor": {
+     "field": "facility_t",
+     "map": {
+      "OUTDOOR": "outdoor",
+      "INDOOR": "indoor"
+     },
+     "default": "unknown"
+    },
+    "lon": "x_coord",
+    "lat": "y_coord",
+    "keep_attrs": [
+     "park",
+     "park_no",
+     "facility_n",
+     "facility_t",
+     "gisobjid"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Public Domain (Socrata license field)",
+    "url": "https://data.cityofchicago.org/d/eix4-gf83",
+    "quote": "Dataset metadata: license 'Public Domain'; data owner Chicago Park District.",
+    "status": "verified_open"
+   },
+   "attribution": "Chicago Park District via City of Chicago Data Portal",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely for Chicago Park District parks as of Nov 2016 (stale: courts built or removed since are not reflected). CPS schoolyards and CHA courts are not included.",
+    "layer": {
+     "kind": "socrata",
+     "domain": "data.cityofchicago.org",
+     "id": "ejsh-fztr",
+     "id_field": "park_no",
+     "name_field": "park"
+    },
+    "description": "CPD_Parks (ejsh-fztr), 617 park polygons with per-park counts (basketba_1 = courts, basketball = backboards)"
+   },
+   "notes": "Points sit on the court: 92% of court points fall inside an OSM court polygon, 7 of 8 NAIP spot checks on the court. Facilities 'as of November 4, 2016'. 323 BASKETBALL COURT points and 771 BASKETBALL BACKBOARD points (feature=hoop, excluded from court metrics by default)."
+  },
+  {
+   "key": "overture_places",
+   "name": "Overture Maps places, category basketball_court",
+   "publisher": "Overture Maps Foundation (Meta, Microsoft, Foursquare, BrightQuery sources)",
+   "city": null,
+   "state": null,
+   "landing_url": "https://docs.overturemaps.org/guides/places/",
+   "api": {
+    "kind": "overture_local"
+   },
+   "fields": {
+    "source_id": "id",
+    "name": "name",
+    "state": "state",
+    "indoor": "unknown",
+    "keep_attrs": [
+     "confidence",
+     "datasets",
+     "licenses",
+     "basic_category"
+    ]
+   },
+   "precision": "feature_point",
+   "public": null,
+   "tier": "weak",
+   "license": {
+    "name": "CDLA-Permissive-2.0 and Apache-2.0 (Foursquare rows)",
+    "url": "https://docs.overturemaps.org/guides/places/",
+    "quote": "published under the CDLA Permissive 2.0 and Apache 2.0 licenses ... contains no OpenStreetMap data (verified 2026-10-09)",
+    "status": "verified_open"
+   },
+   "attribution": "Overture Maps Foundation; Foursquare-sourced rows: see https://opensource.foursquare.com/places-notice-txt",
+   "coverage": {
+    "kind": "none",
+    "complete": "no: a weak, sparse sample of named places (many are indoor gyms, academies, businesses)"
+   },
+   "notes": "From data/sites/overture_places.parquet (release 2026-09-23.1, confidence >= 0.4, CONUS bbox). Weak truth: excluded from evaluate unless --include-weak."
+  },
+  {
+   "key": "boston_bprd",
+   "name": "Park Features (Boston Parks and Recreation)",
+   "publisher": "Boston Parks and Recreation Department",
+   "city": "Boston",
+   "state": "MA",
+   "landing_url": "https://data.boston.gov/dataset/park-features",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://gisportal.boston.gov/arcgis/rest/services/BaseServices/Park_Features/FeatureServer/0",
+    "where": "Asset='Basketball'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "park_name": "Park_Name",
+    "park_ref": "OS_ID",
+    "full_half": "asset_deta",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Park_Name",
+     "OS_ID",
+     "asset_deta",
+     "Asset_use1",
+     "Asset_use2"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "ODC PDDL 1.0",
+    "url": "https://data.boston.gov/dataset/park-features",
+    "quote": "data.boston.gov package 'park-features': license_title 'Open Data Commons Public Domain Dedication and License (PDDL)'.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Boston, Parks and Recreation Department (PDDL; attribution not required)",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely for BPRD-managed parks (132/135 points inside BPRD open space). State DCR courts, BPS schoolyards and BHA courts are not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://gisportal.boston.gov/arcgis/rest/services/BaseServices/Open_Space_Public/MapServer/0",
+     "where": "OS_Mngmnt LIKE '%BPRD%'",
+     "id_field": "OS_ID",
+     "name_field": "SITE_NAME"
+    },
+    "description": "Boston open space managed by BPRD"
+   },
+   "notes": "One point per court (111 full, 24 half); within-park court spacing median 18 m. OBJECTID is the only id (not stable across republishes)."
+  },
+  {
+   "key": "dc_planimetrics",
+   "name": "Recreation planimetrics, layer 7, FEATURECODE 3110 (Basketball Court)",
+   "publisher": "DC Office of the Chief Technology Officer (OCTO)",
+   "city": "Washington",
+   "state": "DC",
+   "landing_url": "https://opendata.dc.gov/datasets/802512707609420fba8aee2bca52b453_7",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Recreation_WebMercator/MapServer/7",
+    "where": "FEATURECODE=3110"
+   },
+   "fields": {
+    "source_id": "GLOBALID",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "CAPTUREYEAR",
+     "CAPTUREACTION",
+     "DESCRIPTION"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": null,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "quote": "This work is licensed under a Creative Commons Attribution 4.0 International License.",
+    "status": "verified_open"
+   },
+   "attribution": "Office of the Chief Technology Officer (OCTO), Government of the District of Columbia",
+   "coverage": {
+    "kind": "city",
+    "complete": "likely: photogrammetric capture of every visible court in the District (2015 base, 2017-2025 updates), any owner incl. private pads; courts under trees may be missed.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Administrative_Other_Boundaries_WebMercator/MapServer/10",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "CITY_NAME"
+    },
+    "description": "District of Columbia boundary"
+   },
+   "notes": "All owners: about 160 of 411 polygons are under 100 m2 (backyard pads, half-court keys); use --min-area 150 for park-scale courts. public is unknown per row."
+  },
+  {
+   "key": "pittsburgh_courts",
+   "name": "City of Pittsburgh Courts (WPRDC)",
+   "publisher": "City of Pittsburgh Department of Public Works",
+   "city": "Pittsburgh",
+   "state": "PA",
+   "landing_url": "https://data.wprdc.org/dataset/city-of-pittsburgh-courts",
+   "api": {
+    "kind": "file",
+    "format": "geojson",
+    "url": "https://data.wprdc.org/dataset/8da92664-22a4-42b8-adae-1950048d70aa/resource/96d327a8-fb12-4174-a30d-7ec9a9920237/download/courts_img.geojson"
+   },
+   "select": {
+    "field": "type",
+    "regex": "^Basketball"
+   },
+   "fields": {
+    "source_id": "id",
+    "name": "name",
+    "park_name": "park",
+    "full_half": "type",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "name",
+     "park",
+     "type",
+     "surface_material"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY",
+    "url": "https://data.wprdc.org/dataset/city-of-pittsburgh-courts",
+    "quote": "WPRDC package 'city-of-pittsburgh-courts': license_id cc-by, license_title 'Creative Commons Attribution'.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Pittsburgh, Department of Public Works; Western Pennsylvania Regional Data Center",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely as of 2021 (stale: 'has not updated since 2021 because of a broken data feed'); 102/105 polygons inside city parks.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services1.arcgis.com/YZCmUqbcsUpOKfj7/arcgis/rest/services/PGHWebParks/FeatureServer/0",
+     "where": "1=1",
+     "id_field": "globalid",
+     "name_field": "updatepknm"
+    },
+    "description": "City of Pittsburgh parks (PGHWebParks)"
+   },
+   "notes": "82 full (median 403 m2) and 23 half courts (median 200 m2)."
+  },
+  {
+   "key": "cambridge_sports_areas",
+   "name": "Sports Areas (City of Cambridge planimetrics)",
+   "publisher": "City of Cambridge GIS",
+   "city": "Cambridge",
+   "state": "MA",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=7fc43476358046f38d84e549b9d8d1a2",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/WnzC35krSYGuYov4/arcgis/rest/services/Sports_Areas/FeatureServer/0",
+    "where": "TYPE='BASKETBALL'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "TYPE",
+     "EditDate"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": null,
+   "tier": "official",
+   "license": {
+    "name": "ODC PDDL 1.0",
+    "url": "https://opendatacommons.org/licenses/pddl/1.0/",
+    "quote": "This data is made available under the Public Domain Dedication and License v1.0 whose full text can be found at: https://opendatacommons.org/licenses/pddl/1.0/ .",
+    "status": "verified_open"
+   },
+   "attribution": "City of Cambridge GIS (PDDL; attribution not required)",
+   "coverage": {
+    "kind": "city",
+    "complete": "likely as of the April 2018 flyover (citywide planimetrics, any owner); courts built since are missing.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services1.arcgis.com/WnzC35krSYGuYov4/arcgis/rest/services/BOUNDARY_CityBoundary_gdb/FeatureServer/0",
+     "where": "1=1",
+     "id_field": "OBJECTID"
+    },
+    "description": "Cambridge city boundary"
+   },
+   "notes": "28 polygons; 7 are multi-court slabs over 800 m2, so polygons are not courts one-to-one."
+  },
+  {
+   "key": "syracuse_courts",
+   "name": "Syracuse's Athletic Courts",
+   "publisher": "City of Syracuse Department of Parks, Recreation & Youth Programs",
+   "city": "Syracuse",
+   "state": "NY",
+   "landing_url": "https://data.syr.gov/datasets/077ba4795c6a4229a3f51189f8113079_0",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services6.arcgis.com/bdPqSfflsdgFRVVM/arcgis/rest/services/Syracuse_s_Athletic_Courts/FeatureServer/0",
+    "where": "COURT_TYPE LIKE 'Basketball%'"
+   },
+   "fields": {
+    "source_id": "ObjectId",
+    "park_name": "PARK",
+    "court_count": "COURT_SIZE___QUANTITY",
+    "full_half": "COURT_SIZE___QUANTITY",
+    "indoor": {
+     "field": "COURT_TYPE",
+     "regex_map": [
+      [
+       "covered",
+       "covered"
+      ]
+     ],
+     "default": "outdoor"
+    },
+    "keep_attrs": [
+     "PARK",
+     "COURT_TYPE",
+     "COURT_SIZE___QUANTITY",
+     "IMPROV__YEAR"
+    ]
+   },
+   "precision": "feature_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "City of Syracuse Open Data Terms of Use",
+    "url": "https://data.syr.gov/pages/termsofuse",
+    "quote": "Unless otherwise noted on an individual document, file, web page or other item, the City grants users of City Datasets permission to reproduce materials published by the City on Open Data Syracuse so long as the City is noted as the source, and the date the web page was accessed ... (the terms also ask that contents not be modified when reproduced).",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "Source: City of Syracuse Open Data (data.syr.gov). The City of Syracuse makes no representation, warranty or guarantee relating to the data or analyses derived from these data.",
+   "coverage": {
+    "kind": "none",
+    "complete": "likely for the 27 city parks in the inventory; no reliable official park polygon layer."
+   },
+   "notes": "One point per park and court-size group; the count is in the text (e.g. 'Full Court (2)'). Internal evaluation only: the terms discourage redistributing modified copies."
+  },
+  {
+   "key": "columbus_crpd",
+   "name": "Recreation and Parks facilities (sports courts)",
+   "publisher": "City of Columbus Recreation and Parks Department",
+   "city": "Columbus",
+   "state": "OH",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=3e0d96ea5bc649848adb4c6cd0ec9dab",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://maps2.columbus.gov/arcgis/rest/services/Schemas/RecreationParks/MapServer/2",
+    "where": "SUB_TYPE = 'BASKETBALL' AND ADD_INFO LIKE 'OUTDOOR%'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "park_name": "PARK_NAME",
+    "full_half": "ADD_INFO",
+    "indoor": "outdoor",
+    "status": {
+     "field": "STATUS",
+     "map": {
+      "ACTIVE": "active"
+     },
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "PARK_NAME",
+     "ADD_INFO",
+     "STATUS"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC0 1.0",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "quote": "This data is dedicated to the public domain under the Creative Commons Universal License (CC0).",
+    "status": "verified_open"
+   },
+   "attribution": "City of Columbus, Recreation and Parks Department (CC0)",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: asset-level inventory of CRPD properties (108/108 courts inside CRPD property polygons). Schools and private courts not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://maps2.columbus.gov/arcgis/rest/services/Schemas/RecreationParks/MapServer/4",
+     "where": "1=1",
+     "id_field": "ObjectID",
+     "name_field": "NAME"
+    },
+    "description": "CRPD property polygons"
+   },
+   "notes": "72 full and 36 half outdoor courts; 49 indoor gym rows excluded by the where clause. 81% within 25 m of an OSM court (median 1 m)."
+  },
+  {
+   "key": "cleveland_parks",
+   "name": "Cleveland Park Amenities (Public)",
+   "publisher": "City of Cleveland, Mayor's Office of Capital Projects with Parks & Recreation",
+   "city": "Cleveland",
+   "state": "OH",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=7160450ac8d7428bbd952c74ca192d98",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/Cleveland_Park_Amenities_(Public)/FeatureServer/11",
+    "where": "Amenity_Type = 'Basketball Court'"
+   },
+   "fields": {
+    "source_id": "GlobalId",
+    "name": "Amenity_Alias",
+    "park_name": "Park_Name",
+    "full_half": "Amenity_SubType",
+    "indoor": {
+     "field": "Amenity_Location",
+     "regex_map": [
+      [
+       "within recreation center",
+       "indoor"
+      ]
+     ],
+     "default": "outdoor"
+    },
+    "keep_attrs": [
+     "Park_Name",
+     "Amenity_SubType",
+     "Amenity_Location"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "ODbL 1.0 (share-alike)",
+    "url": "https://opendatacommons.org/licenses/odbl/1-0/",
+    "quote": "Item license: Open Data Commons Open Database License (ODbL).",
+    "status": "verified_open"
+   },
+   "attribution": "City of Cleveland, Mayor's Office of Capital Projects (MOCAP). ODbL: a published derived database must stay under ODbL.",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: 2026 inventory, 92 courts in 52 parks; 91/92 inside city park polygons.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/Cleveland_Parks_(Public)/FeatureServer/12",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "Park_Name"
+    },
+    "description": "City of Cleveland parks"
+   },
+   "notes": "78 full, 12 half. 92% within 25 m of an OSM court (median 1 m)."
+  },
+  {
+   "key": "sioux_falls_parks",
+   "name": "Park Amenities (City of Sioux Falls)",
+   "publisher": "City of Sioux Falls Parks and Recreation",
+   "city": "Sioux Falls",
+   "state": "SD",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=acd11d56a9394f2889a39e1504c8e088",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://gis.siouxfalls.gov/arcgis/rest/services/Data/Park/MapServer/3",
+    "where": "AmenityType = 'BASKETBALL COURT'"
+   },
+   "fields": {
+    "source_id": "AmenityID",
+    "name": "Information",
+    "park_name": "Park",
+    "park_ref": "ParkID",
+    "full_half": "Name",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Park",
+     "Name",
+     "Notes",
+     "Material",
+     "INSTALLYEAR"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "quote": "The City of Sioux Falls provides open data licensed under the Creative Commons Attribution 4.0 International License.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Sioux Falls",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: asset inventory with install years; 32/32 inside public park boundaries.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://gis.siouxfalls.gov/arcgis/rest/services/Data/Park/MapServer/8",
+     "where": "PublicPrivate = 'Public'",
+     "id_field": "ParkID",
+     "name_field": "Name"
+    },
+    "description": "Sioux Falls public park boundaries"
+   },
+   "notes": "Half courts identifiable only from free text (Name/Notes)."
+  },
+  {
+   "key": "ramsey_county_planimetrics",
+   "name": "Recreation Structures, FeatureCode BC (Ramsey County planimetrics)",
+   "publisher": "Ramsey County, MN (County GIS)",
+   "city": "Ramsey County (Saint Paul and suburbs)",
+   "state": "MN",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=16011400fccd4310abade7b77866b88e",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://gis.ramseycountymn.gov/server/rest/services/Structure/STRUC_Recreation_ViewOnly/FeatureServer/0",
+    "where": "FeatureCode = 'BC'"
+   },
+   "fields": {
+    "source_id": "GlobalID",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Description",
+     "UpdateDate"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": null,
+   "tier": "official",
+   "license": {
+    "name": "No named license; metadata use constraints 'None'",
+    "url": "https://www.arcgis.com/home/item.html?id=16011400fccd4310abade7b77866b88e",
+    "quote": "Resource Constraints: 'None. Please check sources, scale, accuracy, currentness and other available information. ... Acknowledgment of the publisher would be a[ppreciated]'.",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "Ramsey County, MN",
+   "coverage": {
+    "kind": "county",
+    "complete": "likely: photo-interpreted polygons of every visible court in the county (any owner: parks, schools, apartments, homes), reviewed on 2024 aerials.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://gis.ramseycountymn.gov/server/rest/services/Boundary/BOUND_RamseyCounty_ViewOnly/FeatureServer/35",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "CountyName"
+    },
+    "description": "Ramsey County boundary"
+   },
+   "notes": "Includes private residential pads (p10 area 64 m2); use --min-area 150 for park-scale courts."
+  },
+  {
+   "key": "sf_rpd",
+   "name": "Recreation and Parks Functional Areas (Basketball Court)",
+   "publisher": "San Francisco Recreation and Parks Department",
+   "city": "San Francisco",
+   "state": "CA",
+   "landing_url": "https://data.sf.gov/d/38b7-6db3",
+   "api": {
+    "kind": "socrata",
+    "domain": "data.sf.gov",
+    "id": "38b7-6db3",
+    "where": "functional_area_type='Basketball Court'"
+   },
+   "fields": {
+    "source_id": "funcarea_id",
+    "name": "facility_name",
+    "park_name": "property_name",
+    "park_ref": "property_id",
+    "full_half": "functional_area_subtype",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "facility_name",
+     "property_name",
+     "functional_area_subtype",
+     "squarefeet"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "ODC PDDL 1.0",
+    "url": "http://opendatacommons.org/licenses/pddl/1.0/",
+    "quote": "Socrata metadata: license 'Open Data Commons Public Domain Dedication and License' (licenseId PDDL).",
+    "status": "verified_open"
+   },
+   "attribution": "San Francisco Recreation and Parks Department via DataSF",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: RPD's department-wide maintenance inventory of functional areas. SFUSD schoolyards and private courts not included.",
+    "layer": {
+     "kind": "socrata",
+     "domain": "data.sf.gov",
+     "id": "gtr9-ntp6",
+     "id_field": "property_id",
+     "name_field": "property_name"
+    },
+    "description": "Recreation and Parks Properties (255)"
+   },
+   "notes": "73 full (median 502 m2), 28 half (median 158 m2). No status field: removed courts disappear. Some polygons overlay multi-use or tennis courts."
+  },
+  {
+   "key": "san_jose_prns",
+   "name": "Park Amenities (BBALL)",
+   "publisher": "City of San Jose Parks, Recreation and Neighborhood Services",
+   "city": "San Jose",
+   "state": "CA",
+   "landing_url": "https://data.sanjoseca.gov/dataset/park-amenities",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://geo.sanjoseca.gov/server/rest/services/OPN/OPN_OpenDataService/MapServer/554",
+    "where": "AMENITYTYPE='BBALL'"
+   },
+   "fields": {
+    "source_id": "ENTERPRISEID",
+    "name": "NAME",
+    "park_name": "NAME",
+    "court_count": {
+     "weights": {
+      "QUANTITY": 1
+     }
+    },
+    "full_half": "QUANTITY",
+    "status": {
+     "field": "AMENITYSTATUS",
+     "map": {
+      "Open": "active",
+      "Closed": "inactive"
+     },
+     "default": "unknown"
+    },
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "NAME",
+     "QUANTITY",
+     "AMENITYSTATUS",
+     "OWNER",
+     "LIGHTING",
+     "LASTUPDATE"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY",
+    "url": "http://www.opendefinition.org/licenses/cc-by",
+    "quote": "CKAN dataset: license_id cc-by, license_title 'Creative Commons Attribution'.",
+    "status": "verified_open"
+   },
+   "attribution": "City of San Jose",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: PRNS asset inventory for all PRNS sites (3 joint-use school courts included).",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://geo.sanjoseca.gov/server/rest/services/OPN/OPN_OpenDataService/MapServer/188",
+     "where": "1=1",
+     "id_field": "FACILITYID",
+     "name_field": "NAME"
+    },
+    "description": "San Jose parks (614)"
+   },
+   "notes": "One polygon can be a multi-court slab: QUANTITY gives courts (0.5 = half court; sum 96.5). One ~3 m2 sliver is a data error."
+  },
+  {
+   "key": "la_county_parks",
+   "name": "Countywide Parks and Open Space (amenity counts)",
+   "publisher": "Los Angeles County Department of Parks and Recreation",
+   "city": "Los Angeles County (incl. City of Los Angeles)",
+   "state": "CA",
+   "landing_url": "https://egis-lacounty.hub.arcgis.com/",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Countywide_Parks_and_Open_Space__(Public_-_Hosted2)/FeatureServer/0",
+    "where": "BSKTB>0"
+   },
+   "fields": {
+    "source_id": "UNIT_ID",
+    "name": "PARK_NAME",
+    "park_name": "PARK_NAME",
+    "park_ref": "UNIT_ID",
+    "court_count": "BSKTB",
+    "city": "CITY",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "PARK_NAME",
+     "AGNCY_NAME",
+     "AGNCY_LEV",
+     "ACCESS_TYP",
+     "BSKTB",
+     "GYM",
+     "CITY"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "LA County eGIS Terms of Use (open license, no standard name)",
+    "url": "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
+    "quote": "Subject to these Terms of Use, you are granted a license to copy, publish, distribute and/or transmit the Data, to adapt the Data and to exploit the Data for commercial and/or personal use (collectively, \"License\"). ... The License does not grant you any right to use the Data in any way that suggests County's endorsement of your use.",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "County of Los Angeles",
+   "coverage": {
+    "kind": "park",
+    "complete": "partial: per-park court counts for the 1,563 parks with an amenity inventory (AMEN_RPT='Yes', 2016 Parks Needs Assessment), all agencies incl. City of LA. Counts may be stale.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Countywide_Parks_and_Open_Space__(Public_-_Hosted2)/FeatureServer/0",
+     "where": "AMEN_RPT='Yes'",
+     "id_field": "UNIT_ID",
+     "name_field": "PARK_NAME"
+    },
+    "description": "the same park polygons (AMEN_RPT='Yes')"
+   },
+   "notes": "Park-level: one row per park with BSKTB courts; point = park centroid. Only park-level recall is meaningful. DPR_Park_Facilities_View has newer full/half counts for 62 County-run parks (same UNIT_IDs; not added, to avoid double counting)."
+  },
+  {
+   "key": "santa_ana_parks",
+   "name": "Open Space inventory (April 2017)",
+   "publisher": "City of Santa Ana",
+   "city": "Santa Ana",
+   "state": "CA",
+   "landing_url": "https://services1.arcgis.com/u3G8zpmDyNtG4F4e/arcgis/rest/services/Open_Space/FeatureServer/0",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/u3G8zpmDyNtG4F4e/arcgis/rest/services/Open_Space/FeatureServer/0",
+    "where": "Basketball>0"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "Name",
+    "park_name": "Name",
+    "court_count": "Basketball",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Name",
+     "Type_Open_Space",
+     "Basketball",
+     "Address"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "ODC PDDL",
+    "url": "https://opendatacommons.org/licenses/pddl/1-0/",
+    "quote": "Item licenseInfo: 'PDDL'; accessInformation 'City of Santa Ana'.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Santa Ana",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely as of April 2017 (stale): city parks and joint-use school sites.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services1.arcgis.com/u3G8zpmDyNtG4F4e/arcgis/rest/services/Open_Space/FeatureServer/0",
+     "where": "Type_Open_Space IN ('Public City Park','Public City Sports Facility','Joint Use Site')",
+     "id_field": "OBJECTID",
+     "name_field": "Name"
+    },
+    "description": "the same open-space polygons"
+   },
+   "notes": "Park-level counts (20 sites, 48 courts), 2017 vintage."
+  },
+  {
+   "key": "denver_dpr",
+   "name": "Recreational Court Surfaces (ODC_PARK_COURTS_A)",
+   "publisher": "City and County of Denver Department of Parks and Recreation",
+   "city": "Denver",
+   "state": "CO",
+   "landing_url": "https://opendata-geospatialdenver.hub.arcgis.com/datasets/8f6b9f2d327845d0a0deade173b04196",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/ODC_PARK_COURTS_A/FeatureServer/83",
+    "where": "FEATURE LIKE 'Basketball%'"
+   },
+   "fields": {
+    "source_id": "GIS_ASSET_ID",
+    "name": "FEATURE",
+    "park_name": "LOCATION",
+    "park_ref": "LOC_CODE",
+    "full_half": "FEATURE",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "FEATURE",
+     "LOCATION",
+     "LOC_CODE",
+     "LIGHTS",
+     "SURFACE_TYPE",
+     "YEAR_BUILT"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 3.0 (Denver Open Data Catalog)",
+    "url": "https://opendata-geospatialdenver.hub.arcgis.com/",
+    "quote": "The City and County of Denver Open Data Catalog provides open data licensed under the Creative Commons Attribution 3.0 license (CC BY 3.0). ... You are free to copy, distribute, transmit and adapt the data, as long as you credit the \"City of Denver Open Data Catalog\"",
+    "status": "verified_open"
+   },
+   "attribution": "City of Denver Open Data Catalog (CC BY 3.0)",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: DPR asset-management layer, edited 2026-10; all 107 courts inside DPR park polygons. DPS schoolyards not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services1.arcgis.com/zdB7qR0BtYrg0Xpl/arcgis/rest/services/ODC_PARK_PARKLAND_A/FeatureServer/87",
+     "where": "1=1",
+     "id_field": "LOC_CODE",
+     "name_field": "LOCATION"
+    },
+    "description": "Denver parkland polygons"
+   },
+   "notes": "80 full + 27 half courts; median 357 m2 (polygons include some apron). 84/107 within 15 m of an OSM court."
+  },
+  {
+   "key": "austin_apr",
+   "name": "PARD facility points (basketball)",
+   "publisher": "City of Austin Parks and Recreation",
+   "city": "Austin",
+   "state": "TX",
+   "landing_url": "https://geohub.austintexas.gov/datasets/27aa5e7c4be74a439078b3fef086296c",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/pard_facility_points/FeatureServer/0",
+    "where": "ASSET_TYPE='Basketball' OR (ASSET_TYPE IN ('Multipurpose','Playground') AND UPPER(DESCRIPTION) LIKE '%BASKETBALL%')"
+   },
+   "fields": {
+    "source_id": "ASSET_MGMT_ID",
+    "name": "ASSET_NAME",
+    "park_name": "PARK_NAME",
+    "full_half": "DESCRIPTION",
+    "indoor": {
+     "field": "DESCRIPTION",
+     "regex_map": [
+      [
+       "full shade structure",
+       "covered"
+      ],
+      [
+       "full natural shade",
+       "covered"
+      ]
+     ],
+     "default": "outdoor"
+    },
+    "status": {
+     "field": "ASSET_STATUS",
+     "regex_map": [
+      [
+       "^open",
+       "active"
+      ],
+      [
+       "closed",
+       "closed"
+      ]
+     ],
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "ASSET_TYPE",
+     "ASSET_NAME",
+     "PARK_NAME",
+     "DESCRIPTION",
+     "ASSET_STATUS",
+     "YEAR_BUILT"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "City of Austin Open Data terms (public domain unless noted)",
+    "url": "https://data.austintexas.gov/stories/s/ranj-cccq",
+    "quote": "Data and content created by City of Austin government employees within the scope of their employment are not subject to copyright protection. Unless otherwise noted in metadata, datasets available on the City of Austin Open Data Portal are in the public domain ... (this layer is on the city's GeoHub, which shows only a disclaimer)",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "City of Austin, Texas",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: APR asset inventory (Maximo ids); 72/72 inside APR park boundaries. AISD schoolyards not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/BOUNDARIES_city_of_austin_parks/FeatureServer/0",
+     "where": "1=1",
+     "id_field": "ASSET_MGMT_ID",
+     "name_field": "LOCATION_NAME"
+    },
+    "description": "City of Austin park boundaries"
+   },
+   "notes": "Some rows are multi-goal courts (DESCRIPTION). Do not match 'BASKET' alone: it hits disc-golf baskets. 53/72 within 15 m of an OSM court. DESCRIPTION 'Full Shade Structure (Roof)' or 'Full Natural Shade' -> indoor=covered (invisible from above); 'Partial Shade Structure' stays outdoor."
+  },
+  {
+   "key": "phoenix_pard",
+   "name": "ParksOpenData layer 0 (basketball courts)",
+   "publisher": "City of Phoenix Parks and Recreation Department",
+   "city": "Phoenix",
+   "state": "AZ",
+   "landing_url": "https://egishub-phoenix.hub.arcgis.com/",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/cfKakmeHE95cgeEK/arcgis/rest/services/ParksOpenData/FeatureServer/0",
+    "where": "1=1"
+   },
+   "fields": {
+    "source_id": "GLOBALID",
+    "park_name": "PROPERTY_NAME",
+    "full_half": "COURT_SHAPE",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "PROPERTY_NAME",
+     "COURT_SHAPE"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "City of Phoenix Open Data Terms of Use",
+    "url": "https://www.phoenixopendata.com/pages/terms-of-use",
+    "quote": "The City of Phoenix (\"City\") grants you (\"Licensee\") a non-exclusive, limited and revocable rights to use, reproduce, and redistribute City data contained within City's Open Data portal (the \"Data\") subject to the following terms (sibling layers of this service are labelled Creative Commons Attribution)",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "City of Phoenix Parks and Recreation Department",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: dedicated court layer; 153/155 inside park polygons. Schools not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/cfKakmeHE95cgeEK/arcgis/rest/services/ParksOpenData/FeatureServer/10",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "PROPERTY_NAME"
+    },
+    "description": "Phoenix park polygons"
+   },
+   "notes": "153/155 within 15 m of an OSM court (median 1.4 m): Phoenix courts are already well mapped in OSM."
+  },
+  {
+   "key": "college_station_parks",
+   "name": "Sport Court (OpenData_PKS layer 4)",
+   "publisher": "City of College Station Parks and Recreation",
+   "city": "College Station",
+   "state": "TX",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=67e7b64da2e24b61b0131a9d07af644d",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://gis.cstx.gov/csgis/rest/services/_OpenData/OpenData_PKS/MapServer/4",
+    "where": "Court_Field_subtype=5"
+   },
+   "fields": {
+    "source_id": "EntityID",
+    "park_name": "Comments",
+    "indoor": {
+     "field": "Is_Covered",
+     "map": {
+      "Yes": "covered"
+     },
+     "default": "outdoor"
+    },
+    "keep_attrs": [
+     "Comments",
+     "Is_Covered",
+     "Condition",
+     "Has_Lighting",
+     "Install_Date",
+     "FacID"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "quote": "Item license: Creative Commons Attribution 4.0 International.",
+    "status": "verified_open"
+   },
+   "attribution": "City of College Station | Parks and Recreation Department",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: 29/29 inside park polygons; 24 parks with courts.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://gis.cstx.gov/csgis/rest/services/_OpenData/OpenData_PKS/MapServer/1",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "PARK_NAME"
+    },
+    "description": "College Station parks"
+   },
+   "notes": "2 rows are near-identical twins (probable duplicate digitising). Is_Covered='Yes' courts are roofed (indoor=covered: invisible from above)."
+  },
+  {
+   "key": "tempe_courts",
+   "name": "Courts - Park App (basketball)",
+   "publisher": "City of Tempe",
+   "city": "Tempe",
+   "state": "AZ",
+   "landing_url": "https://data.tempe.gov/",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/lQySeXwbBg53XWDi/arcgis/rest/services/Courts_park_app_view/FeatureServer/0",
+    "where": "CourtType='1'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "CourtName",
+    "park_name": "Park",
+    "court_count": "NUM_COURTS",
+    "full_half": "TYPE_",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "CourtName",
+     "Park",
+     "NUM_COURTS",
+     "TYPE_",
+     "LIGHTING"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "quote": "This work is licensed under a Creative Commons Attribution 4.0 International License.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Tempe, AZ",
+   "coverage": {
+    "kind": "park",
+    "complete": "partial: only 30 parks have court polygons while 42 park polygons are flagged Basketball='Yes'; last edited 2022.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/lQySeXwbBg53XWDi/arcgis/rest/services/Park_Boundaries_and_Amenities_view/FeatureServer/0",
+     "where": "1=1",
+     "id_field": "OBJECTID_1",
+     "name_field": "ParkName"
+    },
+    "description": "Tempe park boundaries"
+   },
+   "notes": "Polygons can group 2-3 adjacent courts (NUM_COURTS; 33 rows, 39 courts). Stale (2022)."
+  },
+  {
+   "key": "okc_parks",
+   "name": "Recreation_Parks layer 0 (Facility_Type Basketball)",
+   "publisher": "City of Oklahoma City Parks and Recreation",
+   "city": "Oklahoma City",
+   "state": "OK",
+   "landing_url": "https://data.okc.gov/",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://utility.arcgis.com/usrsvcs/servers/ceaabc8e606c4bf2ba0c4442b48455a8/rest/services/OpenData/Recreation_Parks/FeatureServer/0",
+    "where": "Facility_Type='Basketball'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "Facility_Name",
+    "park_name": "PK_LOCATION",
+    "court_count": "Courts",
+    "full_half": "Facility_Subtype",
+    "indoor": {
+     "field": "In_Outdoor",
+     "map": {
+      "Outdoor": "outdoor",
+      "Indoor": "indoor"
+     },
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "Facility_Name",
+     "PK_LOCATION",
+     "Courts",
+     "Facility_Subtype",
+     "Lighted",
+     "YearBuilt"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "City of Oklahoma City Open Data Policy",
+    "url": "https://data.okc.gov/pages/okc-disclaimer/",
+    "quote": "Open Data: data that is available, in an open format, with no legal encumbrances on use or reuse, and is available for all to access and download in full without fees or a requirement of registration.",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "This dataset is maintained by the City of Oklahoma City.",
+   "coverage": {
+    "kind": "park",
+    "complete": "partial: 45 parks; a separate staff planning layer has 67 court polygons in 56 parks.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://utility.arcgis.com/usrsvcs/servers/fe9dc8e85f9c43b7950e32b69edf28fc/rest/services/OpenData/Recreation_Parks/FeatureServer/4",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "Name"
+    },
+    "description": "OKC park polygons"
+   },
+   "notes": "One point per court group (Courts; 6 rows have 0, read as unknown). 40/51 within 15 m of an OSM court."
+  },
+  {
+   "key": "boulder_parks",
+   "name": "Park Sites (court counts)",
+   "publisher": "City of Boulder Parks and Recreation",
+   "city": "Boulder",
+   "state": "CO",
+   "landing_url": "https://open-data.bouldercolorado.gov/datasets/386970ac9fe641b880e4f42a22111f4e",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://gis.bouldercolorado.gov/ags_svr2/rest/services/parks/ParkSitesOpenData/MapServer/0",
+    "where": "COURTBASKET IN ('1','2','.5')"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "NAME",
+    "park_name": "NAME",
+    "court_count": {
+     "weights": {
+      "COURTBASKET": 1
+     }
+    },
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "NAME",
+     "COURTBASKET",
+     "PARKTYPE"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC0 1.0",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "quote": "Item license: CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/).",
+    "status": "verified_open"
+   },
+   "attribution": "City of Boulder",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely for BPR parks (11 parks, 10.5 courts).",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://gis.bouldercolorado.gov/ags_svr2/rest/services/parks/ParkSitesOpenData/MapServer/1",
+     "where": "1=1",
+     "id_field": "FACILITYID",
+     "name_field": "NAME"
+    },
+    "description": "Boulder park site polygons"
+   },
+   "notes": "Park-level only."
+  },
+  {
+   "key": "ri_scorp",
+   "name": "SCORP Inventory 2024 (basketball courts per facility)",
+   "publisher": "Rhode Island DEM / RIGIS",
+   "city": "Rhode Island (statewide)",
+   "state": "RI",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=6e6cae3df9e04cc1bd8069afb046f084",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services2.arcgis.com/S8zZg9pg23JUEexQ/arcgis/rest/services/SCORP_Inventory_2024/FeatureServer/0",
+    "where": "B_Court > 0"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "F_Name",
+    "park_name": "F_Name",
+    "court_count": "B_Court",
+    "city": "Town",
+    "indoor": "outdoor",
+    "public": {
+     "field": "OwnerTyp",
+     "map": {
+      "PRV": "no"
+     },
+     "default": "yes"
+    },
+    "keep_attrs": [
+     "F_Name",
+     "F_Type",
+     "OwnerTyp",
+     "Town",
+     "B_Court"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "RIGIS license agreement (no named license)",
+    "url": "https://www.arcgis.com/home/item.html?id=6e6cae3df9e04cc1bd8069afb046f084",
+    "quote": "These data are shared under the RIGIS license agreement ... This dataset is provided 'as is.' ... (acknowledge RIGIS and RI DEM in derived products)",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "RIGIS; Rhode Island Department of Environmental Management",
+   "coverage": {
+    "kind": "none",
+    "complete": "likely: 2024 statewide SCORP inventory of public recreation facilities incl. schools; private/HOA courts excluded."
+   },
+   "notes": "Facility points with court counts (195 facilities, 260 courts); no polygons, so recall is measured within --park-radius."
+  },
+  {
+   "key": "ma_dcr_courts",
+   "name": "DCR Hard Courts",
+   "publisher": "Massachusetts Department of Conservation and Recreation",
+   "city": "Massachusetts (DCR properties)",
+   "state": "MA",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=6d551bfba4024965bbff8d23c087809a",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/7iJyYTjCtKsZS1LR/arcgis/rest/services/DCRS_HardCourts_(editable)_view/FeatureServer/0",
+    "where": "CourtType IN ('Basketball','Basketball half-court','Pickleball/Basketball/Tennis')"
+   },
+   "fields": {
+    "source_id": "GlobalID",
+    "name": "HCA_name",
+    "park_name": "AssocDCRfac",
+    "court_count": "NumOfCourts",
+    "full_half": "CourtType",
+    "city": "Town",
+    "indoor": "outdoor",
+    "status": {
+     "field": "Status",
+     "map": {
+      "Open": "active",
+      "Closed": "closed",
+      "Removed": "removed",
+      "Future": "removed"
+     },
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "HCA_name",
+     "AssocDCRfac",
+     "CourtType",
+     "NumOfCourts",
+     "Status",
+     "Town",
+     "VisitDate"
+    ]
+   },
+   "precision": "feature_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Commonwealth of MA EEA/DCR terms",
+    "url": "https://www.arcgis.com/home/item.html?id=6d551bfba4024965bbff8d23c087809a",
+    "quote": "All maps and other material provided herein are protected by copyright. Permission is granted to copy and use the materials.",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "Massachusetts EEA / Department of Conservation and Recreation",
+   "coverage": {
+    "kind": "none",
+    "complete": "likely complete for DCR-managed public hard courts (field-visited 2020-2026)."
+   },
+   "notes": "One point at the approximate centre of each hard-court area (may hold several courts: NumOfCourts)."
+  },
+  {
+   "key": "nashville_metro_parks",
+   "name": "Park Features (FeatureType Basketball)",
+   "publisher": "Metro Nashville Parks and Recreation",
+   "city": "Nashville-Davidson",
+   "state": "TN",
+   "landing_url": "https://data.nashville.gov/datasets/218b05bea1fc4c95a41bf567b7057b56",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services2.arcgis.com/HdTo6HJqh92wn4D8/arcgis/rest/services/Park_Features_view/FeatureServer/2",
+    "where": "FeatureType='Basketball'"
+   },
+   "fields": {
+    "source_id": "GlobalID",
+    "name": "FeatureName",
+    "court_count": {
+     "weights": {
+      "Description": 0.5
+     }
+    },
+    "full_half": "Description",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "FeatureName",
+     "Description",
+     "Address"
+    ]
+   },
+   "precision": "court_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Metro Nashville Open Data terms (Executive Order FO018), no named license",
+    "url": "https://www.nashville.gov/departments/metro-clerk/legal-resources/executive-orders/mayor-freddie-oconnell/fo018",
+    "quote": "Secondary Use of the Data published in the Open Data Portal shall be subject to the user's acceptance of the following: 1) By using Open Data made available through the Open Data Portal, the user agrees to all the terms and conditions stated in the Metropolitan Government's website ... The Open Data should be used for informational purposes only. ... made available \"as is\"",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "Metro Nashville Parks / Metro Nashville Open Data",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: 42/43 points inside Metro park polygons; the park layer flags basketball at 32 parks, matching the 32 addresses here. MNPS schoolyards not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services2.arcgis.com/HdTo6HJqh92wn4D8/arcgis/rest/services/Park_Boundary_View/FeatureServer/6",
+     "where": "MaintainedBy='METRO_PARKS'",
+     "id_field": "PARK_ID",
+     "name_field": "Name"
+    },
+    "description": "Metro Parks boundaries"
+   },
+   "notes": "Only court-level Tennessee source with usable terms. Description holds hoops ('2 Hoops'); courts = hoops/2 rounded up. A few points are multi-court pads ('6 Hoops')."
+  },
+  {
+   "key": "raleigh_prcr",
+   "name": "Raleigh Parks Athletic Courts and Fields (basketball)",
+   "publisher": "City of Raleigh Parks, Recreation and Cultural Resources",
+   "city": "Raleigh",
+   "state": "NC",
+   "landing_url": "https://data-ral.opendata.arcgis.com/datasets/e4c74ca332c940cb96d19aa7622d0b4d",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services.arcgis.com/v400IkDOw1ad7Yad/arcgis/rest/services/Raleigh_Parks_Athletic_Courts_and_Fields/FeatureServer/0",
+    "where": "Basketball IN ('Yes','fullcourt') AND Status='Existing'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "Title",
+    "park_name": "LocationName",
+    "full_half": "Basketball",
+    "indoor": {
+     "field": "IndoorOutdoor",
+     "map": {
+      "Outdoor Covered": "covered",
+      "Outdoor Uncovered": "outdoor"
+     },
+     "default": "unknown"
+    },
+    "status": {
+     "field": "Status",
+     "map": {
+      "Existing": "active"
+     },
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "Title",
+     "LocationName",
+     "Basketball",
+     "Pickleball",
+     "Tennis",
+     "IndoorOutdoor",
+     "MapArea"
+    ]
+   },
+   "precision": "court_polygon",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Open Raleigh terms of use (no named license; revocable)",
+    "url": "https://data-ral.opendata.arcgis.com/",
+    "quote": "By using data made available through this site, the user agrees to all the conditions stated in the following paragraphs ... THE CITY OF RALEIGH MAKES NO REPRESENTATIONS OR WARRANTY AS TO THE COMPLETENESS, ACCURACY, TIMELINESS, OR CONTENT OF ANY DATA ... The City of Raleigh reserves the right to modify and/or discontinue ...",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "City of Raleigh Parks, Recreation and Cultural Resources, GIS Division",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely: dedicated PRCR court inventory edited 2026-09; 61/61 polygons inside Raleigh parks. WCPSS schoolyards not included.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services.arcgis.com/v400IkDOw1ad7Yad/arcgis/rest/services/Parks/FeatureServer/0",
+     "where": "1=1",
+     "id_field": "PARKID",
+     "name_field": "NAME"
+    },
+    "description": "Raleigh parks"
+   },
+   "notes": "Polygons median 253 m2; some multi-use courts (pickleball/tennis lines). 'Outdoor Covered' courts are roofed (indoor=covered)."
+  },
+  {
+   "key": "brec_parks",
+   "name": "BREC Park Amenities (outdoor_basketball)",
+   "publisher": "BREC (Recreation and Park Commission for the Parish of East Baton Rouge)",
+   "city": "Baton Rouge (East Baton Rouge Parish)",
+   "state": "LA",
+   "landing_url": "https://data.brla.gov/d/phg8-g77c",
+   "api": {
+    "kind": "socrata",
+    "domain": "data.brla.gov",
+    "id": "phg8-g77c",
+    "where": "outdoor_basketball='YES'"
+   },
+   "fields": {
+    "source_id": "parkid",
+    "name": "park_name",
+    "park_name": "park_name",
+    "park_ref": "parkid",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "park_name",
+     "classification",
+     "outdoor_basketball",
+     "indoor_basketball"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Public Domain (Socrata license field)",
+    "url": "https://data.brla.gov/d/phg8-g77c",
+    "quote": "Dataset metadata: license 'Public Domain'; attribution BREC.",
+    "status": "verified_open"
+   },
+   "attribution": "BREC",
+   "coverage": {
+    "kind": "park",
+    "complete": "yes for the park-level flag (88 BREC parks with outdoor courts).",
+    "layer": {
+     "kind": "socrata",
+     "domain": "data.brla.gov",
+     "id": "7j6g-4hxu",
+     "id_field": "parkid",
+     "name_field": "facility_name"
+    },
+    "description": "BREC park polygons"
+   },
+   "notes": "Park-level yes/no flag, no court count. BREC's court-point layer (182 courts) has no license text and is not used."
+  },
+  {
+   "key": "lexington_parks",
+   "name": "Park Locations (BASKETBALL_HARDCOURT)",
+   "publisher": "Lexington-Fayette Urban County Government, Parks and Recreation",
+   "city": "Lexington",
+   "state": "KY",
+   "landing_url": "https://data.lexingtonky.gov/",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/Mg7DLdfYcSWIaDnu/arcgis/rest/services/Park_Locations_Public/FeatureServer/0",
+    "where": "BASKETBALL_HARDCOURT='Yes'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "NAME",
+    "park_name": "NAME",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "NAME",
+     "PARKTYPE",
+     "PARKAREA"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "LFUCG Open Data Terms of Use (no named license)",
+    "url": "https://data.lexingtonky.gov/",
+    "quote": "As a convenience to potential users, the Lexington-Fayette Urban County Government (\"LFUCG\") makes a variety of datasets (\"Data\") available for download through this website. Your use of the Data is subject to these terms of use ... (terms include an indemnity clause)",
+    "status": "open_terms_no_named_license"
+   },
+   "attribution": "Lexington-Fayette Urban County Government",
+   "coverage": {
+    "kind": "none",
+    "complete": "likely for the park-level flag (54 parks)."
+   },
+   "notes": "Park points with a yes/no flag only."
+  },
+  {
+   "key": "tn_statewide_rec_areas",
+   "enabled": false,
+   "name": "Tennessee Statewide Recreation Areas (Basketball_Court_Outdoors)",
+   "publisher": "State of Tennessee (STS / TREC)",
+   "city": "Tennessee (statewide)",
+   "state": "TN",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=f6c2e7523bee4312a9bf1c34ab4df394",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services1.arcgis.com/YuVBSS7Y1of2Qud1/arcgis/rest/services/Tennessee_Statewide_Recreation_Areas_Public/FeatureServer/0",
+    "where": "Basketball_Court_Outdoors > 0"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "Name",
+    "park_name": "Name",
+    "court_count": "Basketball_Court_Outdoors",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Name",
+     "County_Name",
+     "Managing_Entity_Name",
+     "Joint_Use_Schoolyard",
+     "Basketball_Court_Outdoors"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "State of Tennessee disclaimer only",
+    "url": "https://www.arcgis.com/home/item.html?id=f6c2e7523bee4312a9bf1c34ab4df394",
+    "quote": "The State of Tennessee makes no representation or warranty as to the accuracy of this data ... The user accepts this data on an 'AS IS' basis",
+    "status": "unclear"
+   },
+   "attribution": "State of Tennessee",
+   "coverage": {
+    "kind": "park",
+    "complete": "partial: 445 recreation areas with 587 outdoor courts statewide (Davidson 46, Shelby 46, Knox 28, Hamilton 11); 0 can mean not surveyed.",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services1.arcgis.com/YuVBSS7Y1of2Qud1/arcgis/rest/services/Tennessee_Statewide_Recreation_Areas_Public/FeatureServer/0",
+     "where": "Basketball_Court_Outdoors > 0",
+     "id_field": "OBJECTID",
+     "name_field": "Name"
+    },
+    "description": "the same recreation-area polygons"
+   },
+   "notes": "DISABLED until the State confirms reuse terms. Covers Memphis, Knoxville and Chattanooga at park level, where no city court layer is published."
+  },
+  {
+   "key": "fl_fori",
+   "enabled": false,
+   "name": "Florida Outdoor Recreation Inventory (FORI)",
+   "publisher": "Florida DEP Division of Recreation and Parks",
+   "city": "Florida (statewide)",
+   "state": "FL",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=c5b766ec085440738425724c451701aa",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://ca.dep.state.fl.us/arcgis/rest/services/OpenData/PARKS_FORI/MapServer/0",
+    "where": "OUTDOOR_BASKETBALL_COURTS > 0"
+   },
+   "fields": {
+    "source_id": "ID",
+    "name": "SITE_NAME",
+    "park_name": "SITE_NAME",
+    "court_count": "OUTDOOR_BASKETBALL_COURTS",
+    "indoor": "outdoor",
+    "public": {
+     "field": "CATEGORY",
+     "map": {
+      "COMMERCIAL": "no",
+      "CLUB": "no"
+     },
+     "default": "yes"
+    },
+    "keep_attrs": [
+     "SITE_NAME",
+     "CATEGORY",
+     "PRIMARY_AGENCY",
+     "COUNTY",
+     "TIME_STAMP",
+     "OUTDOOR_BASKETBALL_COURTS"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "FDEP GIS data disclaimer (no grant of reuse)",
+    "url": "http://ca.dep.state.fl.us/AGO/AGOImages/OpenDataSite/FDEP%20Data%20Disclaimer.pdf",
+    "quote": "Item licenseInfo: 'This data is intended to be used for informational and planning purposes.' The FDEP disclaimer only limits liability.",
+    "status": "unclear"
+   },
+   "attribution": "FDEP, Division of Recreation and Parks",
+   "coverage": {
+    "kind": "none",
+    "complete": "partial: 2,697 sites / 4,958 courts statewide from sources of varying age (830 rows stamped before 2016)."
+   },
+   "notes": "DISABLED until FDEP confirms reuse terms. Largest statewide set found; site points with counts; includes commercial/club sites."
+  }
+ ]
+}

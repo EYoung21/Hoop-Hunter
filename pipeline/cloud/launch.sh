@@ -4,6 +4,7 @@
 #
 #   bash cloud/launch.sh main --max-hours 6                    # default type list, default 6 h lifetime
 #   bash cloud/launch.sh scan2 gpu_1x_a100_sxm4 --max-hours 3   # explicit preference list (comma-separated)
+#   bash cloud/launch.sh wdtest --max-hours 1 --idle-min 5        # short idle limit (watchdog test node)
 #   HH_REGIONS=us-east-1 bash cloud/launch.sh scan3              # restrict regions
 #
 # Safety: --max-hours (default 6, at most 168) sets a hard deadline. It is recorded in last_run.json and
@@ -18,11 +19,14 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lambda_api.sh"
 
 MAX_HOURS=6
+IDLE_MIN="${HH_IDLE_MIN:-30}"
 POS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --max-hours) MAX_HOURS="${2:?--max-hours needs a value}"; shift 2 ;;
     --max-hours=*) MAX_HOURS="${1#*=}"; shift ;;
+    --idle-min) IDLE_MIN="${2:?--idle-min needs a value}"; shift 2 ;;   # on-instance idle limit (default 30)
+    --idle-min=*) IDLE_MIN="${1#*=}"; shift ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -47,14 +51,14 @@ trap 'rm -f "$TMPJ"' EXIT
 CODE=$(lambda_api_code GET /instance-types "" "$TMPJ")
 [ "$CODE" = "200" ] || { echo "GET /instance-types -> $CODE" >&2; exit 1; }
 read -r ITYPE REGION PRICE < <(lastrun pick --types "$TYPES" --regions "$REGIONS" < "$TMPJ")
-echo "launching $NAME as $API_NAME: $ITYPE in $REGION at \$$PRICE/h, max lifetime $MAX_HOURS h (until $DEADLINE)"
+echo "launching $NAME as $API_NAME: $ITYPE in $REGION at \$$PRICE/h, max lifetime $MAX_HOURS h (until $DEADLINE), idle limit $IDLE_MIN min"
 BODY=$(printf '{"region_name":"%s","instance_type_name":"%s","ssh_key_names":["%s"],"name":"%s"}' \
   "$REGION" "$ITYPE" "$SSH_KEY_NAME" "$API_NAME")
 RESP=$(lambda_api POST /instance-operations/launch "$BODY")
 ID=$(printf '%s' "$RESP" | json_field data.instance_ids.0 || true)
 if [ -z "$ID" ]; then echo "launch failed: $(printf '%s' "$RESP" | json_field error)" >&2; exit 1; fi
 lastrun add "$NAME" instance_id="$ID" instance_type="$ITYPE" region="$REGION" price_per_hour="$PRICE" \
-  launched_at=now status=booting ip= api_name="$API_NAME" max_hours="$MAX_HOURS" deadline="$DEADLINE"
+  launched_at=now status=booting ip= api_name="$API_NAME" max_hours="$MAX_HOURS" deadline="$DEADLINE" idle_min="$IDLE_MIN"
 echo "instance $ID ($NAME) launched and recorded; waiting for it to become active"
 
 STATUS=""
@@ -69,7 +73,7 @@ for _ in $(seq 1 120); do
       echo "WARNING: HH_NO_WATCHDOG=1, no on-instance watchdog; only cloud/watchdog.py protects $NAME" >&2
       exit 0
     fi
-    if bash "$CLOUD_DIR/install_watchdog.sh" "$NAME"; then
+    if HH_IDLE_MIN="$IDLE_MIN" bash "$CLOUD_DIR/install_watchdog.sh" "$NAME"; then
       echo "reminder: keep the local backstop running too (python cloud/watchdog.py --loop 10, see README)"
       exit 0
     fi

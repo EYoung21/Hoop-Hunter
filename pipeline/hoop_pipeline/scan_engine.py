@@ -145,11 +145,19 @@ def cmd_plan(args: argparse.Namespace) -> None:
         "centroid_lon", "centroid_lat")}
     per_state: dict[str, dict[str, Any]] = {}
     tr_cache: dict[int, Transformer] = {}
+    # A state without flights of its own (DC: NAIP has no "dc" items; MD and VA flights cover it) borrows other
+    # states' flights. Its rows get item ids "<id>~<ST>" so they never collide with the lender's rows.
+    borrow = {k.upper(): [s.upper() for s in v.split(",")] for k, v in
+              (x.split("=", 1) for x in (args.flight_states or []))}
     for st in codes:
         ts = time.monotonic()
         st_alb = shapely.buffer(shapely.transform(states.geometry(st), lambda xy: np.column_stack(
             to_alb.transform(xy[:, 0], xy[:, 1]))), args.state_buffer_m)
-        idx = cat.items_for_state(st, args.min_year)
+        if st in borrow:
+            idx = np.concatenate([cat.items_for_state(s, args.min_year) for s in borrow[st]])
+        else:
+            idx = cat.items_for_state(st, args.min_year)
+        suffix = f"~{st}" if st in borrow else ""
         coarse = cat.gsd[idx] > args.max_native_gsd
         if coarse.any():
             log.info("%s: ignoring %d items coarser than %.2f m", st, int(coarse.sum()), args.max_native_gsd)
@@ -193,7 +201,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
                 continue
             c = shapely.centroid(zone)
             clon, clat = _tf(ALBERS, "EPSG:4326").transform(c.x, c.y)
-            for key, val in (("item_id", str(cat.ids[it])), ("state", st), ("href", str(cat.hrefs[it])), ("epsg", code),
+            for key, val in (("item_id", str(cat.ids[it]) + suffix), ("state", st), ("href", str(cat.hrefs[it])), ("epsg", code),
                              ("year", int(cat.years[it])), ("date", cat.date_str(int(it))), ("gsd", native),
                              ("t_a", tf[0]), ("t_c", tf[2]), ("t_e", tf[4]), ("t_f", tf[5]),
                              ("width", int(cat.width[it])), ("height", int(cat.height[it])), ("scale", scale),
@@ -249,28 +257,61 @@ def cmd_partition(args: argparse.Namespace) -> None:
     pending = np.ones(len(ids), bool)
     if args.pending:
         pending = np.array([not done_marker(results, s, i).exists() for s, i in zip(sts, ids)])
+    if args.done_list:  # item ids finished elsewhere (e.g. pulled from other nodes' packs), one per line
+        done_ids: set[str] = set()
+        for p in args.done_list:
+            done_ids |= {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}
+        pending &= np.array([i not in done_ids for i in ids])
     n_bins = args.nodes * args.procs
     load = np.zeros(n_bins)
     bins: list[list[str]] = [[] for _ in range(n_bins)]
-    for k in np.argsort(-tiles):
-        if not pending[k]:
-            continue
-        b = int(np.argmin(load))
-        bins[b].append(ids[k])
-        load[b] += tiles[k]
+    rng = random.Random(0)
+    state_order: list[str] = []
+    if args.by_state:
+        # Every state is balanced across all bins on its own, and every manifest lists its states in the same
+        # order (shuffled within a state), so the fleet finishes states one after another and each state's
+        # results can be pulled as soon as it is done.
+        st_arr = np.asarray(sts, dtype=object)
+        st_tiles = Counter()
+        for s_, t_, p_ in zip(sts, tiles.tolist(), pending.tolist()):
+            if p_:
+                st_tiles[s_] += t_
+        first = [s.upper() for s in (args.state_order or [])]
+        state_order = [s for s in first if s in st_tiles] + sorted(
+            (s for s in st_tiles if s not in first), key=lambda s: -st_tiles[s])
+        for s in state_order:
+            idx = np.flatnonzero((st_arr == s) & pending)
+            sub = np.zeros(n_bins)
+            per: list[list[str]] = [[] for _ in range(n_bins)]
+            for k in idx[np.argsort(-tiles[idx], kind="stable")]:
+                b = int(np.lexsort((load, sub))[0])  # least loaded in this state, then overall
+                per[b].append(ids[k])
+                sub[b] += tiles[k]
+            for b in range(n_bins):
+                rng.shuffle(per[b])
+                bins[b] += per[b]
+                load[b] += sub[b]
+    else:
+        for k in np.argsort(-tiles):
+            if not pending[k]:
+                continue
+            b = int(np.argmin(load))
+            bins[b].append(ids[k])
+            load[b] += tiles[k]
     mdir = args.plan / "manifests"
     mdir.mkdir(parents=True, exist_ok=True)
     for old in mdir.glob("node*_p*.txt"):
         old.unlink()
-    rng = random.Random(0)
     for b, items in enumerate(bins):
-        rng.shuffle(items)  # spread each node's reads across the storage account's partitions
+        if not args.by_state:
+            rng.shuffle(items)  # spread each node's reads across the storage account's partitions
         node, proc = divmod(b, args.procs)
         (mdir / f"node{node}_p{proc}.txt").write_text("\n".join(items) + "\n", encoding="utf-8")
     write_json(mdir / "partition.json", {"nodes": args.nodes, "procs": args.procs, "pending_only": args.pending,
+                                         "by_state": bool(args.by_state), "state_order": state_order,
                                          "items": int(pending.sum()), "tiles_per_bin": [int(v) for v in load]})
-    log.info("partitioned %d items into %d manifests; tiles per manifest %s", int(pending.sum()), n_bins,
-             [int(v) for v in load])
+    log.info("partitioned %d items into %d manifests%s; tiles per manifest %s", int(pending.sum()), n_bins,
+             " (by state)" if args.by_state else "", [int(v) for v in load])
 
 
 # =========================================================================== run
@@ -836,45 +877,68 @@ def cmd_merge(args: argparse.Namespace) -> None:
 
     t0 = time.monotonic()
     results: Path = args.results or args.plan / "results"
-    files = sorted(p for p in results.glob("*/*.parquet") if not p.name.startswith("."))
     plan = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "state", "kept_tiles", "zone_km2"])
     plan_ids = plan.column("item_id").to_pylist()
     plan_states = plan.column("state").to_pylist()
-    done = [done_marker(results, s, i).exists() for s, i in zip(plan_states, plan_ids)]
+    if args.packed:
+        # packed per-state files from `pack` (one pair per state and node): detections + the done items
+        files = sorted(p for p in args.packed.glob("*.det.parquet") if not p.name.startswith("."))
+        done_ids: set[str] = set()
+        for p in sorted(args.packed.glob("*.items.parquet")):
+            done_ids |= set(pq.read_table(p, columns=["item_id"]).column("item_id").to_pylist())
+        done = [i in done_ids for i in plan_ids]
+    else:
+        files = sorted(p for p in results.glob("*/*.parquet") if not p.name.startswith("."))
+        done = [done_marker(results, s, i).exists() for s, i in zip(plan_states, plan_ids)]
     log.info("%d result files; %d of %d planned items done", len(files), sum(done), len(plan_ids))
     tables = [pq.read_table(p) for p in files]
     t = pa.concat_tables(tables) if tables else pa.Table.from_pydict({k: [] for k in DET_SCHEMA.names}, schema=DET_SCHEMA)
+    if args.min_conf > 0:
+        t = t.filter(pa.compute.greater_equal(t.column("conf"), args.min_conf))
+    del tables
     d = {k: t.column(k).to_numpy(zero_copy_only=False) for k in t.column_names}
     n = t.num_rows
     conf = d["conf"].astype(float)
     boxes = np.column_stack([d["ax0"], d["ay0"], d["ax1"], d["ay1"]]).astype(float)
     cx, cy = (boxes[:, 0] + boxes[:, 2]) / 2, (boxes[:, 1] + boxes[:, 3]) / 2
-    # cross-item merge: greedy by score, suppress boxes overlapping (IoU/containment) or centred within merge_m
-    order = np.argsort(-(conf - 0.05 * d["edge"].astype(float)))
-    item_of = d["item_id"]
-    tree = shapely.STRtree(shapely.points(cx, cy))
+    # cross-item merge: greedy by score, suppress boxes overlapping (IoU/containment) or centred within merge_m.
+    # All candidate pairs come from one bulk STRtree query; the greedy pass then only walks each box's neighbours.
+    order = np.argsort(-(conf - 0.05 * d["edge"].astype(float)), kind="stable")
+    _, item_code = np.unique(d["item_id"].astype(str), return_inverse=True)
+    area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    radius = np.maximum(args.merge_m, 0.5 * np.maximum(boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1]))
+    pts = shapely.points(cx, cy)
+    tree = shapely.STRtree(pts)
+    qi, qj = tree.query(pts, predicate="dwithin", distance=float(radius.max()) if n else 0.0)
+    m = qi != qj
+    qi, qj = qi[m], qj[m]
+    dist = np.hypot(cx[qi] - cx[qj], cy[qi] - cy[qj])
+    ix = np.clip(np.minimum(boxes[qi, 2], boxes[qj, 2]) - np.maximum(boxes[qi, 0], boxes[qj, 0]), 0, None)
+    iy = np.clip(np.minimum(boxes[qi, 3], boxes[qj, 3]) - np.maximum(boxes[qi, 1], boxes[qj, 1]), 0, None)
+    inter = ix * iy
+    # the distance rule is for zone-border duplicates (same court seen by two items); inside an item,
+    # tile-level NMS already ran and side-by-side courts ~18 m apart must survive
+    close = (item_code[qi] != item_code[qj]) & (dist <= args.merge_m)
+    iou = inter / np.maximum(area[qi] + area[qj] - inter, 1e-9)
+    over = (iou >= 0.3) | (inter / np.maximum(np.minimum(area[qi], area[qj]), 1e-9) >= 0.6)
+    hit = (dist <= radius[qi]) & (close | over)  # i suppresses j
+    qi, qj = qi[hit], qj[hit]
+    srt = np.argsort(qi, kind="stable")
+    qi, qj = qi[srt], qj[srt]
+    indptr = np.searchsorted(qi, np.arange(n + 1))
     suppressed = np.zeros(n, bool)
     keep = []
-    area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-    for i in order:
+    for i in order.tolist():
         if suppressed[i]:
             continue
         keep.append(i)
-        r = max(args.merge_m, 0.5 * max(boxes[i, 2] - boxes[i, 0], boxes[i, 3] - boxes[i, 1]))
-        near = tree.query(shapely.Point(cx[i], cy[i]), predicate="dwithin", distance=r)
-        for j in near:
-            if j == i or suppressed[j]:
-                continue
-            ix = max(0.0, min(boxes[i, 2], boxes[j, 2]) - max(boxes[i, 0], boxes[j, 0]))
-            iy = max(0.0, min(boxes[i, 3], boxes[j, 3]) - max(boxes[i, 1], boxes[j, 1]))
-            inter = ix * iy
-            # the distance rule is for zone-border duplicates (same court seen by two items); inside an item,
-            # tile-level NMS already ran and side-by-side courts ~18 m apart must survive
-            close = item_of[i] != item_of[j] and np.hypot(cx[i] - cx[j], cy[i] - cy[j]) <= args.merge_m
-            if close or inter / max(1e-9, area[i] + area[j] - inter) >= 0.3 or inter / max(1e-9, min(area[i], area[j])) >= 0.6:
-                suppressed[j] = True
-    keep_a = np.array(sorted(keep, key=lambda i: -conf[i]), dtype=np.int64)
-    log.info("merge: %d detections -> %d after cross-item merge (%.0f m)", n, len(keep_a), args.merge_m)
+        a_, b_ = indptr[i], indptr[i + 1]
+        if b_ > a_:
+            suppressed[qj[a_:b_]] = True
+    keep_a = np.array(keep, dtype=np.int64)
+    keep_a = keep_a[np.argsort(-conf[keep_a], kind="stable")]
+    log.info("merge: %d detections -> %d after cross-item merge (%.0f m; %d neighbour pairs)", n, len(keep_a),
+             args.merge_m, len(qi))
 
     # known OSM basketball features nearby
     a, g = read_geoparquet(args.courts, columns=["osm_ref", "state", "label_ok", "center_lon", "center_lat"])
@@ -896,9 +960,9 @@ def cmd_merge(args: argparse.Namespace) -> None:
     states_scanned = sorted(set(plan_states))
     sel = np.isin(a["state"].astype(str), states_scanned) & a["label_ok"].astype(bool)
     # only courts inside the zones of finished items count (a partial run must not look like low recall)
-    zt = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "state", "zone_wkb"])
-    zdone = [shapely.from_wkb(w) for w, s_, i_ in zip(zt.column("zone_wkb").to_pylist(), zt.column("state").to_pylist(),
-                                                     zt.column("item_id").to_pylist()) if done_marker(results, s_, i_).exists()]
+    zt = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "zone_wkb"])
+    zdone = [shapely.from_wkb(w) for w, ok_ in zip(zt.column("zone_wkb").to_pylist(), done) if ok_]
+    del zt
     if zdone:
         ztree = shapely.STRtree(zdone)
         cx_alb, cy_alb = to_alb.transform(a["center_lon"].astype(float), a["center_lat"].astype(float))
@@ -923,11 +987,15 @@ def cmd_merge(args: argparse.Namespace) -> None:
         best = np.zeros(len(court_idx))
         for c_, d_ in zip(ci, di):
             best[c_] = max(best[c_], conf[keep_a[d_]])
+        thr = (0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7)
         for name, m in (("all", np.ones(len(court_idx), bool)), ("inside_v1_mask", in_v1), ("outside_v1_mask", ~in_v1)):
-            if not m.any():
+            if not m.any() or (name != "all" and v1_mask is None):
                 continue
-            recall[name] = {"courts": int(m.sum()), **{f"{t:.2f}": round(float((best[m] >= t).mean()), 4)
-                                                       for t in (0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7)}}
+            recall[name] = {"courts": int(m.sum()), **{f"{t:.2f}": round(float((best[m] >= t).mean()), 4) for t in thr}}
+        cst = a["state"][court_idx].astype(str)
+        recall["by_state"] = {s: {"courts": int((cst == s).sum()),
+                                  **{f"{t:.2f}": round(float((best[cst == s] >= t).mean()), 4) for t in thr}}
+                              for s in sorted(set(cst.tolist()))}
         recall["court_best_conf"] = {str(a["osm_ref"][court_idx[i]]): round(float(best[i]), 4) for i in range(len(court_idx))}
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -966,14 +1034,95 @@ def cmd_merge(args: argparse.Namespace) -> None:
 
 
 # =========================================================================== status
+def read_manifest(path: Path) -> list[str]:
+    return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     results: Path = args.results or args.plan / "results"
     plan = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "state", "kept_tiles"])
+    if args.manifest:
+        plan = plan.filter(pa.compute.is_in(plan.column("item_id"), value_set=pa.array(read_manifest(args.manifest))))
     ids, sts, tiles = (plan.column(c).to_pylist() for c in ("item_id", "state", "kept_tiles"))
-    done = np.array([done_marker(results, s, i).exists() for s, i in zip(sts, ids)])
+    done = np.array([done_marker(results, s, i).exists() for s, i in zip(sts, ids)], dtype=bool)
     tiles_a = np.array(tiles)
-    print(json.dumps({"items": len(ids), "done": int(done.sum()), "tiles": int(tiles_a.sum()),
-                      "tiles_done": int(tiles_a[done].sum())}))
+    print(json.dumps({"items": len(ids), "done": int(done.sum()), "pending": int((~done).sum()),
+                      "tiles": int(tiles_a.sum()), "tiles_done": int(tiles_a[done].sum())}))
+
+
+# =========================================================================== plan-merge
+def cmd_plan_merge(args: argparse.Namespace) -> None:
+    """Concatenate plans (e.g. CONUS without DC + a DC plan that borrows MD/VA flights) into one."""
+    tables = [pq.read_table(p / "plan.parquet") for p in args.plans]
+    t = pa.concat_tables(tables)
+    ids = t.column("item_id").to_pylist()
+    if len(set(ids)) != len(ids):
+        raise SystemExit("duplicate item ids across plans")
+    args.out.mkdir(parents=True, exist_ok=True)
+    pq.write_table(t, args.out / "plan.parquet", compression="zstd")
+    stats: dict[str, Any] = {"states": {}, "merged_from": [str(p) for p in args.plans]}
+    for p in args.plans:
+        s = json.loads((p / "plan_stats.json").read_text(encoding="utf-8"))
+        stats["states"].update(s.get("states", {}))
+        for k in ("tile_px", "overlap_px", "gsd", "state_buffer_m"):
+            stats.setdefault(k, s.get(k))
+    stats.update({"items": t.num_rows, "tiles": int(sum(t.column("kept_tiles").to_pylist())),
+                  "zone_km2": round(float(sum(t.column("zone_km2").to_pylist())), 1)})
+    write_json(args.out / "plan_stats.json", stats)
+    log.info("plan-merge: %d items, %d tiles, %d states -> %s", stats["items"], stats["tiles"], len(stats["states"]),
+             args.out)
+
+
+# =========================================================================== pack
+def cmd_pack(args: argparse.Namespace) -> None:
+    """Pack one node's finished items per state into a few files that are cheap to pull:
+
+    ``<out>/<ST>.<node>.det.parquet`` (every detection of the node's done items of that state) and
+    ``<ST>.<node>.items.parquet`` (one row per done item: tiles, detections, seconds, worker). When all of the
+    node's items of a state are done the pair is final (``<ST>.<node>.final`` marker, never rewritten);
+    before that it is a partial pack, rewritten only when more items have finished."""
+    results: Path = args.results or args.plan / "results"
+    order = read_manifest(args.manifest)
+    plan = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "state"])
+    st_of = dict(zip(plan.column("item_id").to_pylist(), plan.column("state").to_pylist()))
+    by_state: dict[str, list[str]] = {}
+    for i in order:
+        by_state.setdefault(st_of[i], []).append(i)
+    out: Path = args.out
+    out.mkdir(parents=True, exist_ok=True)
+    summary: dict[str, Any] = {}
+    for st, items in by_state.items():
+        stem = out / f"{st}.{args.node}"
+        final = stem.with_suffix(stem.suffix + ".final")
+        if final.exists():
+            summary[st] = "final"
+            continue
+        done = [i for i in items if done_marker(results, st, i).exists()]
+        if not done:
+            continue
+        cnt = stem.with_suffix(stem.suffix + ".count")
+        prev = int(cnt.read_text()) if cnt.exists() else -1
+        if len(done) == prev and len(done) < len(items):
+            summary[st] = f"{len(done)}/{len(items)}"
+            continue
+        dets = [pq.read_table(results / st / f"{i}.parquet") for i in done]
+        tab = pa.concat_tables(dets) if dets else pa.Table.from_pylist([], schema=DET_SCHEMA)
+        info = [json.loads(done_marker(results, st, i).read_text(encoding="utf-8")) for i in done]
+        keys = ["item_id", "state", "tiles", "skipped_empty_tiles", "planned_tiles", "raw_detections", "detections",
+                "read_seconds", "item_seconds", "worker", "finished"]
+        itab = pa.table({k: [r.get(k) for r in info] for k in keys})
+        for name, t in (("det", tab), ("items", itab)):
+            tmp = out / f".{st}.{args.node}.{name}.parquet.tmp"
+            pq.write_table(t, tmp, compression="zstd")
+            tmp.replace(out / f"{st}.{args.node}.{name}.parquet")
+        if len(done) == len(items):
+            final.write_text(dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds") + "\n")
+            cnt.unlink(missing_ok=True)
+            summary[st] = "final"
+        else:
+            cnt.write_text(str(len(done)))
+            summary[st] = f"{len(done)}/{len(items)}"
+    print(json.dumps(summary))
 
 
 # =========================================================================== CLI
@@ -989,6 +1138,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--state-buffer-m", type=float, default=100.0)
     p.add_argument("--min-zone-m2", type=float, default=500.0)
     p.add_argument("--max-native-gsd", type=float, default=0.65, help="ignore coarser (pre-2018 1 m) items")
+    p.add_argument("--flight-states", nargs="*", help="ST=A,B: plan state ST from flights of A and B (DC=MD,VA)")
     p.add_argument("--tile", type=int, default=config.CHIP_SIZE_PX)
     p.add_argument("--overlap", type=int, default=config.SCAN_OVERLAP_PX)
     p.add_argument("--gsd", type=float, default=config.TARGET_GSD_M)
@@ -999,6 +1149,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--procs", type=int, default=1, help="worker processes per node")
     p.add_argument("--pending", action="store_true", help="only items without a done marker in --results")
     p.add_argument("--results", type=Path)
+    p.add_argument("--done-list", type=Path, nargs="*", help="files listing item ids already done elsewhere")
+    p.add_argument("--by-state", action="store_true",
+                   help="balance every state across all manifests and order each manifest state by state")
+    p.add_argument("--state-order", nargs="*", help="states to put first (the rest follow by planned tiles, largest first)")
     add_common_args(p)
     p = sub.add_parser("run")
     p.add_argument("--plan", type=Path, required=True)
@@ -1036,14 +1190,29 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--known-radius", type=float, default=config.KNOWN_COURT_RADIUS_M)
     p.add_argument("--merge-m", type=float, default=20.0)
     p.add_argument("--v1-mask", type=Path, default=config.SCAN_DIR / "TN" / "mask.geojson")
+    p.add_argument("--packed", type=Path, help="read `pack` output (*.det.parquet / *.items.parquet) instead of --results")
+    p.add_argument("--min-conf", type=float, default=0.0, help="drop raw detections below this before merging")
     add_common_args(p)
     p = sub.add_parser("status")
     p.add_argument("--plan", type=Path, required=True)
     p.add_argument("--results", type=Path)
+    p.add_argument("--manifest", type=Path, help="only the items of this manifest")
+    add_common_args(p)
+    p = sub.add_parser("plan-merge")
+    p.add_argument("--plans", type=Path, nargs="+", required=True)
+    p.add_argument("--out", type=Path, required=True)
+    add_common_args(p)
+    p = sub.add_parser("pack")
+    p.add_argument("--plan", type=Path, required=True)
+    p.add_argument("--manifest", type=Path, required=True)
+    p.add_argument("--node", required=True)
+    p.add_argument("--results", type=Path)
+    p.add_argument("--out", type=Path, required=True)
     add_common_args(p)
     args = ap.parse_args(argv)
     setup_logging(args.verbose)
-    {"plan": cmd_plan, "partition": cmd_partition, "run": cmd_run, "merge": cmd_merge, "status": cmd_status}[args.cmd](args)
+    {"plan": cmd_plan, "partition": cmd_partition, "run": cmd_run, "merge": cmd_merge, "status": cmd_status,
+     "plan-merge": cmd_plan_merge, "pack": cmd_pack}[args.cmd](args)
 
 
 if __name__ == "__main__":

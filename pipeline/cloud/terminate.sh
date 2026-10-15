@@ -23,7 +23,7 @@ if [ "${1:-}" = "--all" ]; then
   if [ "$CODE" = "200" ]; then
     while read -r id; do
       [ -n "$id" ] && [[ ! " ${ids[*]-} " == *" $id "* ]] && ids+=("$id")
-    done < <("$PY" -c 'import json,sys; [print(i["id"]) for i in json.load(open(sys.argv[1])).get("data", []) if i.get("status") != "terminated"]' "$TMPJ")
+    done < <("$PY" -c 'import json,sys; [print(i["id"]) for i in json.load(open(sys.argv[1])).get("data", []) if i.get("status") != "terminated"]' "$TMPJ" | tr -d '\r')
   fi
 else
   KEY="${1:?node name, instance id or --all}"

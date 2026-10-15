@@ -272,11 +272,24 @@ def classify_point(f: dict[str, Any], p_home: float = float("nan"), padus_inset_
 
 
 # =========================================================================== classify
+_CATALOGS: dict[str, Any] = {}
+
+
+def naip_catalog(naip_dir: Path) -> Any:
+    """NaipCatalog loaded once per process (rescore calls fetch_context_crops once per chunk)."""
+    from .naip_index import NaipCatalog
+
+    key = str(naip_dir)
+    if key not in _CATALOGS:
+        _CATALOGS[key] = NaipCatalog.load(naip_dir)
+    return _CATALOGS[key]
+
+
 def fetch_context_crops(lons: np.ndarray, lats: np.ndarray, states: np.ndarray, px: int, naip_dir: Path,
                         workers: int = 64) -> tuple[np.ndarray, np.ndarray]:
-    from .naip_index import GroupedReader, NaipCatalog, plan_windows
+    from .naip_index import GroupedReader, plan_windows
 
-    cat = NaipCatalog.load(naip_dir)
+    cat = naip_catalog(naip_dir)
     item = cat.select(lons, lats, states, half_m=px * config.TARGET_GSD_M / 2)
     wp = plan_windows(cat, item, lons, lats, px, config.TARGET_GSD_M)
     out = np.zeros((len(lons), px, px, 3), np.uint8)

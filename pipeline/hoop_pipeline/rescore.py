@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--chunk", type=int, default=512, help="candidates fetched per round (grouped by NAIP item)")
     ap.add_argument("--batch", type=int, default=32, help="chips per detector / classifier batch")
     ap.add_argument("--workers", type=int, default=32)
+    ap.add_argument("--shard", help="K/N: only every N-th candidate (by confidence rank) starting at K")
     ap.add_argument("--out", type=Path, required=True)
     add_common_args(ap)
     args = ap.parse_args(argv)
@@ -88,7 +89,11 @@ def main(argv: list[str] | None = None) -> None:
     near = np.asarray(d.get("near_known_osm") or [""] * len(conf), dtype=object)
     sel = np.flatnonzero((conf >= args.min_conf) & ((near == "") | args.include_known))
     sel = sel[np.argsort(-conf[sel])]
-    log.info("%d candidates with conf >= %.2f%s", len(sel), args.min_conf, "" if args.include_known else " (not near OSM)")
+    if args.shard:  # K/N: every N-th candidate starting at K, so N nodes can split one rescore
+        k_, n_ = (int(v) for v in args.shard.split("/"))
+        sel = sel[k_::n_]
+    log.info("%d candidates with conf >= %.2f%s%s", len(sel), args.min_conf, "" if args.include_known else " (not near OSM)",
+             f", shard {args.shard}" if args.shard else "")
     ids = np.asarray(d["id"], dtype=object)
     lon, lat = np.asarray(d["lon"], float), np.asarray(d["lat"], float)
     st = np.asarray(d.get("state") or ["TN"] * len(conf), dtype=object)
@@ -99,6 +104,9 @@ def main(argv: list[str] | None = None) -> None:
     ctx = CropClassifier.load(args.context_model) if args.context_model else None
     ctx_px = int(round(float(ctx.meta.get("point_m", 160.0)) / config.TARGET_GSD_M)) if ctx else 0
     args.chips_dir.mkdir(parents=True, exist_ok=True)
+    from concurrent.futures import ThreadPoolExecutor
+
+    save_pool = ThreadPoolExecutor(max_workers=8)
     res: dict[str, list[Any]] = {k: [] for k in ("id", "conf", "chip_ok", "conf2", "verify", "p_home", "seconds_chunk")}
     fetched = 0
     for k in range(0, len(sel), args.chunk):
@@ -118,12 +126,15 @@ def main(argv: list[str] | None = None) -> None:
             nj = np.asarray(need)
             imgs, got = fetch_chips(lon[idx[nj]], lat[idx[nj]], st[idx[nj]], args.naip_dir, args.workers)
             fetched += int(got.sum())
+            saves = []
             for q, jj in enumerate(nj.tolist()):
                 if got[q]:
                     chips[jj] = imgs[q]
                     ok[jj] = True
-                    Image.fromarray(imgs[q]).save(args.chips_dir / f"{ids[idx[jj]]}.jpg", quality=92)
-            del imgs
+                    saves.append((imgs[q], args.chips_dir / f"{ids[idx[jj]]}.jpg"))
+            # JPEG encoding releases the GIL; at national scale a serial save loop costs as much as the fetch
+            list(save_pool.map(lambda a: Image.fromarray(a[0]).save(a[1], quality=92), saves))
+            del imgs, saves
         conf2 = np.zeros(len(idx))
         verify = np.full(len(idx), np.nan)
         p_home = np.full(len(idx), np.nan)
