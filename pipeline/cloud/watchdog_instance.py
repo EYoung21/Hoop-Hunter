@@ -16,7 +16,11 @@ fallback every 5 minutes. Files on the instance:
 
 Rules, checked in order on every run:
 
-1. **max lifetime**: now >= deadline (``launch.sh --max-hours``, default 6) -> terminate.
+1. **max lifetime**: now >= deadline (``launch.sh --max-hours``, default 6) -> terminate. When ``progress_glob``
+   is set (a scan writes one ``*.done.json`` per finished file), the deadline only applies to a node that has
+   stopped making progress: it moves out to ``stall_minutes`` (default 60) after the last newly finished file.
+   A node that keeps finishing files keeps running; a stuck one (GPU busy, nothing finishing) stops an hour
+   after its last finished file or at its launch deadline, whichever is later.
 2. **idle**: no activity for ``idle_minutes`` (default 30) -> terminate. Activity is any of: GPU utilisation
    >= ``gpu_idle_pct`` (5%), a process on the GPU, a pipeline process (``run_remote.sh``, ``hoop_pipeline``,
    the venv's python, ``setup_remote.sh``, ...), or a hold set with ``watchdog_instance.py hold MINUTES``
@@ -28,6 +32,7 @@ unknown (404), and logs every attempt. If every attempt of a run fails, the next
 
     python3 watchdog_instance.py check [--dry-run] [--config PATH] [--now ISO]
     python3 watchdog_instance.py status            # decision as JSON, never terminates
+    python3 watchdog_instance.py selftest          # key works: GET /instances lists this id, IP lookup agrees (exit 4 if not)
     python3 watchdog_instance.py hold 45           # count as active for 45 more minutes (capped at the deadline)
 """
 
@@ -86,6 +91,8 @@ class Config:
     log_file: Path = Path("/var/log/hoophunter-watchdog.log")
     hold_file: Path = Path("/home/ubuntu/hh/watchdog_hold_until")
     job_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_JOB_PATTERNS))
+    progress_glob: str = ""        # e.g. /home/ubuntu/hh/pipeline/data/scan2/US/results/*/*.done.json
+    stall_minutes: float = 60.0    # deadline extends to last progress + this
     attempts: int = 5
     backoff_s: list[float] = field(default_factory=lambda: [5.0, 15.0, 30.0, 60.0])
     http_timeout_s: float = 30.0
@@ -100,7 +107,9 @@ class Config:
         for k in ("ip", "name", "api"):
             if d.get(k):
                 kw[k] = str(d[k])
-        for k in ("idle_minutes", "gpu_idle_pct", "http_timeout_s"):
+        if d.get("progress_glob"):
+            kw["progress_glob"] = str(d["progress_glob"])
+        for k in ("idle_minutes", "gpu_idle_pct", "http_timeout_s", "stall_minutes"):
             if d.get(k) is not None:
                 kw[k] = float(d[k])
         for k in ("key_file", "state_file", "log_file", "hold_file"):
@@ -189,6 +198,22 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def count_progress(pattern: str) -> int | None:
+    """Number of files matching ``pattern`` (finished-work markers), or None when not configured."""
+    if not pattern:
+        return None
+    import glob
+    return len(glob.glob(pattern))
+
+
+def effective_deadline(cfg: Config, state: dict[str, Any]) -> dt.datetime:
+    """The launch deadline, pushed out to last progress + stall_minutes while the node keeps finishing work."""
+    last = parse_time(state.get("last_progress"))
+    if last is None:
+        return cfg.deadline
+    return max(cfg.deadline, last + dt.timedelta(minutes=cfg.stall_minutes))
+
+
 def read_hold(path: Path) -> dt.datetime | None:
     try:
         return parse_time(path.read_text(encoding="utf-8"))
@@ -207,11 +232,18 @@ class Decision:
 
 
 def decide(cfg: Config, state: dict[str, Any], now: dt.datetime, gpu: tuple[float, int] | None, jobs: list[str],
-           hold_until: dt.datetime | None) -> Decision:
-    """Pure decision; updates ``state['last_active']`` (and sets it on the first run)."""
+           hold_until: dt.datetime | None, progress: int | None = None) -> Decision:
+    """Pure decision; updates ``state['last_active']`` (and sets it on the first run), and
+    ``state['progress_count'/'last_progress']`` when a progress count is given."""
     first = parse_time(state.get("first_run"))
     if first is None:
         state["first_run"] = now.isoformat(timespec="seconds")
+    if progress is not None:
+        prev = state.get("progress_count")
+        if prev is not None and progress > int(prev):
+            state["last_progress"] = now.isoformat(timespec="seconds")
+        state["progress_count"] = progress
+    deadline = effective_deadline(cfg, state)
     active = []
     if gpu is not None and gpu[0] >= cfg.gpu_idle_pct:
         active.append(f"gpu {gpu[0]:.0f}%")
@@ -219,20 +251,23 @@ def decide(cfg: Config, state: dict[str, Any], now: dt.datetime, gpu: tuple[floa
         active.append(f"{gpu[1]} GPU process(es)")
     if jobs:
         active.append(f"{len(jobs)} pipeline process(es)")
-    if hold_until is not None and now < min(hold_until, cfg.deadline):
-        active.append(f"hold until {min(hold_until, cfg.deadline).isoformat(timespec='minutes')}")
+    if hold_until is not None and now < min(hold_until, deadline):
+        active.append(f"hold until {min(hold_until, deadline).isoformat(timespec='minutes')}")
     if active or parse_time(state.get("last_active")) is None:
         state["last_active"] = now.isoformat(timespec="seconds")
     last = parse_time(state.get("last_active")) or now
     idle = max(0.0, (now - last).total_seconds() / 60)
-    if now >= cfg.deadline:
-        return Decision(True, f"max lifetime reached (deadline {cfg.deadline.isoformat(timespec='minutes')})", idle, active)
+    if now >= deadline:
+        why = "no finished files" if deadline > cfg.deadline else "max lifetime reached"
+        return Decision(True, f"{why} (deadline {deadline.isoformat(timespec='minutes')})", idle, active)
     if idle >= cfg.idle_minutes:
         return Decision(True, f"idle for {idle:.0f} min (GPU < {cfg.gpu_idle_pct:.0f}%, no GPU or pipeline process, "
                               f"no hold)", idle, active)
-    left = (cfg.deadline - now).total_seconds() / 3600
+    left = (deadline - now).total_seconds() / 3600
+    moved = " (moved out by progress)" if deadline > cfg.deadline else ""
+    done = f"; {progress} files done" if progress is not None else ""
     return Decision(False, f"ok: {'active (' + ', '.join(active) + ')' if active else f'idle {idle:.0f} min'}; "
-                           f"{left:.1f} h to deadline", idle, active)
+                           f"{left:.1f} h to deadline{moved}{done}", idle, active)
 
 
 # --------------------------------------------------------------------------- Lambda API
@@ -257,7 +292,8 @@ def api_call(cfg: Config, method: str, path: str, payload: dict[str, Any] | None
     except OSError as e:
         log.error("cannot read key file %s: %s", cfg.key_file, e.strerror)
         return 0, None
-    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": "hoophunter-watchdog/1.0"}  # Lambda blocks the default Python-urllib agent (403)
+    # Lambda answers 403 to the default Python-urllib User-Agent
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": "hoophunter-watchdog/1.0"}
     body = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
@@ -297,7 +333,9 @@ def terminate_self(cfg: Config, httpf: HttpFn = http, sleep: Callable[[float], N
             log.warning("terminate %s attempt %d/%d -> HTTP %s %s", iid, attempt, cfg.attempts, code, done or "")
             if code == 200:
                 return True
-            if code == 404:  # unknown id (e.g. a wrong record): look it up by IP next time round
+            # Unknown id -> 404 global/object-does-not-exist; malformed id -> 400 global/invalid-parameters
+            # (both measured against the real API on 2026-10-15): look the id up by IP next time round
+            if code == 404 or (code == 400 and "invalid-parameters" in json.dumps(data or "")):
                 iid = ""
         if attempt < cfg.attempts:
             sleep(cfg.backoff_s[min(attempt - 1, len(cfg.backoff_s) - 1)] if cfg.backoff_s else 0.0)
@@ -317,7 +355,8 @@ def run_check(cfg: Config, *, dry_run: bool = False, now: dt.datetime | None = N
             log.info("another watchdog run holds the lock; skipping")
             return Decision(False, "locked", 0.0, [])
         state = load_state(cfg.state_file)
-        d = decide(cfg, state, now, gpu(), jobs(cfg.job_patterns), read_hold(cfg.hold_file))
+        d = decide(cfg, state, now, gpu(), jobs(cfg.job_patterns), read_hold(cfg.hold_file),
+                   count_progress(cfg.progress_glob))
         state["last_check"] = now.isoformat(timespec="seconds")
         state["last_decision"] = d.reason
         if d.terminate:
@@ -330,6 +369,25 @@ def run_check(cfg: Config, *, dry_run: bool = False, now: dt.datetime | None = N
             log.info("%s", d.reason)
         save_state(cfg.state_file, state)
         return d
+
+
+def selftest(cfg: Config, httpf: HttpFn = http, ips: Callable[[], list[str]] = local_ips) -> dict[str, Any]:
+    """Prove the watchdog can act: the key file works for GET /instances, this instance's configured id is on
+    the account (and not terminated), and looking the id up by IP finds the same id. Never terminates."""
+    code, data = api_call(cfg, "GET", "/instances", None, httpf)
+    res: dict[str, Any] = {"get_instances_http": code, "instance_id": cfg.instance_id}
+    insts = data.get("data", []) if code == 200 and isinstance(data, dict) else []
+    me = [i for i in insts if str(i.get("id", "")) == cfg.instance_id]
+    res["instances_on_account"] = len(insts)
+    res["own_id_listed"] = bool(me)
+    if me:
+        res["own_status"] = me[0].get("status")
+        res["own_name"] = me[0].get("name")
+    res["resolved_by_ip"] = resolve_instance_id(cfg, httpf, ips()) if code == 200 else ""
+    res["ok"] = bool(code == 200 and me and res["resolved_by_ip"] == cfg.instance_id
+                     and res.get("own_status") not in ("terminated", "terminating"))
+    (log.info if res["ok"] else log.error)("selftest %s", json.dumps(res))
+    return res
 
 
 def set_hold(cfg: Config, minutes: float, now: dt.datetime | None = None) -> dt.datetime:
@@ -360,17 +418,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="log the decision, never call the API")
     p.add_argument("--now", help="pretend it is this UTC time (testing)")
     sub.add_parser("status", help="print the decision as JSON; never terminates")
+    sub.add_parser("selftest", help="check the key works (GET /instances lists this instance, IP lookup agrees); "
+                                    "exit 4 if not; never terminates")
     p = sub.add_parser("hold", help="count as active for MINUTES more (never past the deadline)")
     p.add_argument("minutes", type=float)
     args = ap.parse_args(argv)
     cfg = Config.load(args.config)
-    setup_logging(cfg.log_file if args.cmd == "check" else None)
+    setup_logging(cfg.log_file if args.cmd in ("check", "selftest") else None)
+    if args.cmd == "selftest":
+        return 0 if selftest(cfg)["ok"] else 4
     if args.cmd == "hold":
         print("hold until", set_hold(cfg, args.minutes).isoformat(timespec="seconds"))
         return 0
     if args.cmd == "status":
         state = load_state(cfg.state_file)
-        d = decide(cfg, state, utcnow(), gpu_activity(), pipeline_processes(cfg.job_patterns), read_hold(cfg.hold_file))
+        d = decide(cfg, state, utcnow(), gpu_activity(), pipeline_processes(cfg.job_patterns), read_hold(cfg.hold_file),
+                   count_progress(cfg.progress_glob))
         print(json.dumps({"instance_id": cfg.instance_id, "name": cfg.name, "deadline": cfg.deadline.isoformat(),
                           "would_terminate": d.terminate, "reason": d.reason, "idle_minutes": round(d.idle_minutes, 1),
                           "active": d.active}, indent=1))

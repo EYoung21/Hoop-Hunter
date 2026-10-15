@@ -100,7 +100,8 @@ class Verdict:
 
 
 def judge(inst: dict[str, Any], records: dict[str, dict[str, Any]], seen: dict[str, str], now: dt.datetime,
-          default_max_h: float, hard_cap_h: float) -> Verdict:
+          default_max_h: float, hard_cap_h: float, last_progress: dt.datetime | None = None,
+          stall_minutes: float = 60.0) -> Verdict:
     iid, name, status = str(inst.get("id", "")), str(inst.get("name") or ""), str(inst.get("status") or "")
     ours = bool(OURS.match(name)) or iid in records
     if not ours or status in GONE:
@@ -117,7 +118,25 @@ def judge(inst: dict[str, Any], records: dict[str, dict[str, Any]], seen: dict[s
     if nd is None and rec_deadline is None:
         candidates.append((first_seen + dt.timedelta(hours=default_max_h), f"first seen + {default_max_h:g} h"))
     deadline, source = min(candidates, key=lambda c: c[0])
+    # A node that keeps finishing work is never stopped by a deadline: the result puller records when each
+    # node's finished-file count last grew (cloud/logs/progress.json); the deadline moves to that + stall_minutes.
+    if last_progress is not None and last_progress + dt.timedelta(minutes=stall_minutes) > deadline:
+        deadline, source = last_progress + dt.timedelta(minutes=stall_minutes), f"{source}, moved out by progress"
     return Verdict(iid, name, status, True, deadline, source, now >= deadline)
+
+
+def load_progress(path: Path) -> dict[str, dt.datetime]:
+    """name -> last time its finished-file count grew, as written by cloud/pull_results.py."""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for name, rec in d.items():
+        t = parse_iso(rec.get("last_progress")) if isinstance(rec, dict) else None
+        if t is not None:
+            out[name] = t
+    return out
 
 
 # --------------------------------------------------------------------------- API
@@ -153,7 +172,9 @@ class Api:
         if not key:
             log.error("no API key (%s)", f"env {self.key_env}" if self.key_env else self.key_file)
             return 0, None
-        headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": "hoophunter-watchdog/1.0"}  # Lambda blocks the default Python-urllib agent (403)
+        # Lambda's API returns 403 to the default Python-urllib User-Agent, so always send our own.
+        headers = {"Authorization": f"Bearer {key}", "Accept": "application/json",
+                   "User-Agent": "hoophunter-watchdog/1.0"}
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
@@ -217,7 +238,7 @@ def mark_terminated(path: Path, iid: str, reason: str) -> None:
 
 def run_once(api: Api, *, last_run: Path, state_file: Path, now: dt.datetime | None = None, dry_run: bool = False,
              default_max_h: float = 6.0, hard_cap_h: float = 24.0, retry_s: float = 300.0,
-             sleep: Callable[[float], None] = time.sleep) -> int:
+             sleep: Callable[[float], None] = time.sleep, progress_file: Path | None = None) -> int:
     """One pass. Returns 0 (nothing to do / all terminated), 1 (API unreachable), 2 (a terminate failed)."""
     now = now or utcnow()
     code, data = api.call("GET", "/instances")
@@ -231,11 +252,13 @@ def run_once(api: Api, *, last_run: Path, state_file: Path, now: dt.datetime | N
     except (OSError, ValueError):
         state = {}
     seen: dict[str, str] = state.setdefault("first_seen", {})
+    progress = load_progress(progress_file or state_file.parent / "progress.json")
     rc = 0
     for inst in instances:
         iid = str(inst.get("id", ""))
         seen.setdefault(iid, now.isoformat(timespec="seconds"))
-        v = judge(inst, records, seen, now, default_max_h, hard_cap_h)
+        v = judge(inst, records, seen, now, default_max_h, hard_cap_h,
+                  progress.get(str(inst.get("name") or "")))
         if not v.ours or v.deadline is None:
             log.info("%s %s (%s): %s", iid, v.name, v.status, v.source)
             continue

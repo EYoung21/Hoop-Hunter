@@ -94,6 +94,25 @@ def scan_complete(ip: str) -> bool:
     return state == "idle" and items > 0 and done >= items
 
 
+PROGRESS = PIPE / "cloud" / "logs" / "progress.json"
+
+
+def record_progress(name: str, files: dict[str, int]) -> None:
+    """Note when this node's finished-file count last grew; cloud/watchdog.py keeps working nodes alive past
+    their deadline based on it."""
+    import datetime as dt
+    done = sum(1 for p in files if p.endswith(".done.json"))
+    try:
+        d = json.loads(PROGRESS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    rec = d.get(name, {})
+    if done > int(rec.get("done", -1)):
+        rec = {"done": done, "last_progress": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
+    d[name] = rec
+    PROGRESS.write_text(json.dumps(d, indent=1), encoding="utf-8")
+
+
 def progress(name: str, files: dict[str, int]) -> str:
     done = sum(1 for p in files if p.endswith(".done.json"))
     return f"{name}: {done} files done on node"
@@ -116,6 +135,7 @@ def main() -> None:
     for name, ip in nodes:
         try:
             files = remote_listing(ip)
+            record_progress(name, files)
             need = [p for p, s in files.items() if not (PIPE / p).exists() or (PIPE / p).stat().st_size != s]
             # copy a .done.json only together with (after) its parquet, so a local done marker always has its data
             need.sort(key=lambda p: p.endswith(".done.json"))
