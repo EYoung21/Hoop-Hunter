@@ -141,8 +141,8 @@ def main() -> None:
             need.sort(key=lambda p: p.endswith(".done.json"))
             log.info("%s (%s); %d new file(s) to copy", progress(name, files), ip, len(need))
             if need and not args.dry_run:
-                for i in range(0, len(need), 2000):
-                    log.info("%s: copied %d", name, fetch(ip, need[i:i + 2000]))
+                for i in range(0, len(need), 500):  # small batches: a slow link times out on big ones
+                    log.info("%s: copied %d", name, fetch(ip, need[i:i + 500]))
             # Each node carries a watchdog hold (~/hh/watchdog_hold_until) so it can't go idle-terminate
             # before its results are here. Release it once the node's whole manifest is done and everything is copied;
             # the node's watchdog then terminates it after 30 idle minutes. If this PC is asleep, the hold
