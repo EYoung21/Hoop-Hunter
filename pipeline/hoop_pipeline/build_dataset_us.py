@@ -37,6 +37,13 @@ sides. A small spatial slice (``--val-us-frac`` of ~5 km cells) of the rest
 becomes ``val_us`` for an in-distribution comparison; everything else is
 ``train``.
 
+v3 options (README "v3"): ``--extra-courts`` adds labels that are not OSM courts (snapped official courts and
+pseudo-labels, role ``label``), likely courts nobody labelled (role ``ambiguous``: a chip showing one is dropped) and
+look-alike boxes (role ``hard``: a negative chip holding one is a hard negative, listed ``--hard-repeat`` times).
+Official courts also get ``--extra-offsets`` chips of their own, listed ``--extra-repeat`` times. ``--remove-labels``
+turns OSM refs into background (label_clean's removed list); ``--holdout-zones`` drops every train / val_us chip that
+touches a held-out truth area. The repeated training list is ``train_v3.txt`` (``data_v3.yaml``).
+
 Imagery: chips are 320 x 320 px at 0.6 m (0.3 m states are read from the
 0.6 m overview), JPEG quality 95, read with ``GroupedReader`` (one COG open
 per group of windows, thread pool, retries with backoff).
@@ -100,12 +107,14 @@ class CourtLayer:
     lon: np.ndarray
     lat: np.ndarray
     geoms: np.ndarray            # lon/lat
-    role: np.ndarray             # "label" | "ambiguous" | "ignore"
+    role: np.ndarray             # "label" | "ambiguous" | "ignore" | "hard"
     half_extent_m: np.ndarray
     tree: STRtree = field(repr=False)
+    kind: np.ndarray | None = None   # "osm" or an --extra-courts kind ("official", "pseudo", "maybe", "hard")
 
 
-def load_court_layer(path: Path, container_max_area_m2: float, exclude: set[str] | None = None) -> CourtLayer:
+def load_court_layer(path: Path, container_max_area_m2: float, exclude: set[str] | None = None,
+                     remove: set[str] | None = None) -> CourtLayer:
     a, g = read_geoparquet(path, columns=["osm_ref", "state", "center_lon", "center_lat", "area_m2", "geom_kind",
                                           "outdoor", "court_like", "label_ok"])
     outdoor = a["outdoor"].astype(bool)
@@ -123,11 +132,75 @@ def load_court_layer(path: Path, container_max_area_m2: float, exclude: set[str]
         bad = np.isin(a["osm_ref"].astype(str), np.array(sorted(exclude)))
         role[bad & (role == "label")] = "ambiguous"
         log.info("excluded %d labels (now ambiguous: chips showing them are dropped)", int(bad.sum()))
+    if remove:
+        gone = np.isin(a["osm_ref"].astype(str), np.array(sorted(remove))) & (role == "label")
+        role[gone] = "ignore"
+        log.info("removed %d labels (now background)", int(gone.sum()))
     b = shapely.bounds(g)
     lat = a["center_lat"].astype(float)
     half = np.maximum((b[:, 2] - b[:, 0]) * M_PER_DEG_LAT * np.cos(np.radians(lat)), (b[:, 3] - b[:, 1]) * M_PER_DEG_LAT) / 2
     log.info("courts: %d features; roles %s", len(role), dict(Counter(role.tolist())))
-    return CourtLayer(a["osm_ref"], a["state"], a["center_lon"].astype(float), lat, g, role, half, STRtree(g))
+    return CourtLayer(a["osm_ref"], a["state"], a["center_lon"].astype(float), lat, g, role, half, STRtree(g),
+                      np.full(len(role), "osm", dtype=object))
+
+
+EXTRA_PRIORITY = {"official": 0, "pseudo": 1, "maybe": 2, "hard": 3}
+
+
+def merge_extra_courts(courts: CourtLayer, path: Path, overlap: float = 0.3) -> CourtLayer:
+    """Append an --extra-courts layer (v3.py ``layers``) to the OSM court layer.
+
+    Extras that overlap an OSM label or ambiguous feature (intersection >= ``overlap`` of the smaller box, or within
+    8 m of an OSM point) are dropped: OSM already covers them. Among extras, the higher-priority kind wins
+    (official > pseudo > maybe > hard)."""
+    a, g = read_geoparquet(path, columns=["ref", "kind", "role", "state", "center_lon", "center_lat"])
+    n0 = len(g)
+    order = np.argsort([EXTRA_PRIORITY.get(str(k), 9) for k in a["kind"]], kind="stable")
+    a = {k: v[order] for k, v in a.items()}
+    g = g[order]
+    kind = a["kind"].astype(object)
+    ga = to_albers(g)
+    area = shapely.area(ga)
+    osm_sel = np.flatnonzero(np.isin(courts.role, ("label", "ambiguous")))
+    oa = to_albers(courts.geoms[osm_sel])
+    o_area = shapely.area(oa)
+    otree = STRtree(oa)
+    drop = np.zeros(len(g), bool)
+    ei, oj = otree.query(shapely.buffer(ga, 8.0), predicate="intersects")
+    for i, j in zip(ei, oj):
+        if drop[i]:
+            continue
+        if o_area[j] <= 1.0:  # OSM node court: within 8 m
+            drop[i] = True
+            continue
+        inter = shapely.area(shapely.intersection(ga[i], oa[j]))
+        if inter >= overlap * min(area[i], o_area[j]):
+            drop[i] = True
+    why: Counter[str] = Counter(f"{k}_covered_by_osm" for k in kind[drop])
+    # extras among themselves: a box covered by a higher-priority extra goes
+    etree = STRtree(ga)
+    ii, jj = etree.query(ga, predicate="intersects")
+    m = jj < ii
+    for i, j in zip(ii[m], jj[m]):
+        if drop[i] or drop[j] or kind[i] == kind[j]:
+            continue
+        inter = shapely.area(shapely.intersection(ga[i], ga[j]))
+        if inter >= overlap * min(area[i], area[j]):
+            drop[i] = True
+            why[f"{kind[i]}_covered_by_{kind[j]}"] += 1
+    keep = ~drop
+    b = shapely.bounds(g[keep])
+    lat = a["center_lat"][keep].astype(float)
+    half = np.maximum((b[:, 2] - b[:, 0]) * M_PER_DEG_LAT * np.cos(np.radians(lat)), (b[:, 3] - b[:, 1]) * M_PER_DEG_LAT) / 2
+    kd = kind[keep]
+    log.info("extra courts: %d of %d kept (%s); dropped %s", int(keep.sum()), n0, dict(Counter(kd.tolist())), dict(why))
+    geoms = np.concatenate([courts.geoms, g[keep]])
+    base_kind = courts.kind if courts.kind is not None else np.full(len(courts.role), "osm", dtype=object)
+    return CourtLayer(np.concatenate([courts.ref.astype(object), a["ref"][keep].astype(object)]),
+                      np.concatenate([courts.state.astype(object), a["state"][keep].astype(object)]),
+                      np.concatenate([courts.lon, a["center_lon"][keep].astype(float)]), np.concatenate([courts.lat, lat]),
+                      geoms, np.concatenate([courts.role, a["role"][keep].astype(object)]),
+                      np.concatenate([courts.half_extent_m, half]), STRtree(geoms), np.concatenate([base_kind, kd]))
 
 
 def to_albers(geoms: np.ndarray) -> np.ndarray:
@@ -186,6 +259,29 @@ def plan_positives(courts: CourtLayer, plan: Plan, chip_half_m: float, jitter: f
         per_state[st] += 1
     log.info("positives: %d of %d labelable courts", len(usable), int((courts.role == "label").sum()))
     return per_state
+
+
+def plan_extra_positives(courts: CourtLayer, plan: Plan, chip_half_m: float, jitter: float, offsets: int,
+                         rng: np.random.Generator) -> int:
+    """``offsets`` chips per official extra court, each randomly offset with the court whole inside."""
+    if courts.kind is None or offsets <= 0:
+        return 0
+    usable = np.flatnonzero((courts.kind == "official") & (courts.role == "label")
+                            & (courts.half_extent_m < 0.8 * chip_half_m))
+    n = 0
+    for k in range(offsets):
+        room = np.maximum(0.0, chip_half_m - courts.half_extent_m[usable] - 8.0) * jitter
+        dx = rng.uniform(-1, 1, len(usable)) * room
+        dy = rng.uniform(-1, 1, len(usable)) * room
+        lons, lats = offset(courts.lon[usable], courts.lat[usable], dx, dy)
+        for q, i in enumerate(usable):
+            ref = str(courts.ref[i])
+            st = str(courts.state[i])
+            safe = "".join(ch if ch.isalnum() else "_" for ch in ref)[:60]
+            plan.add(f"{st}_xpos_{safe}_{k}", "pos", "official", st, lons[q], lats[q], ref)
+            n += 1
+    log.info("official extra positives: %d chips (%d courts x %d offsets)", n, len(usable), offsets)
+    return n
 
 
 def _random_point_in(geom: Any, rng: random.Random, tries: int = 40) -> tuple[float, float] | None:
@@ -335,6 +431,25 @@ class LabelResult:
     boxes: list[list[tuple[float, float, float, float]]]
     refs: list[list[str]]
     ambiguous: np.ndarray
+    hard: np.ndarray | None = None             # chip holds a visible --extra-courts "hard" box no label covers
+    ambiguous_extra: np.ndarray | None = None  # ambiguous because of an --extra-courts "maybe" box
+    kinds: list[list[str]] | None = None       # kind of each label box ("osm", "official", "pseudo")
+
+
+def _overlaps_any(box: tuple[float, float, float, float], labels: list[tuple[float, float, float, float]]) -> bool:
+    """Box (x0, y0, x1, y1 px) has IoU >= 0.2 with, or its centre inside, any label box (xc, yc, w, h px)."""
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    for xc, yc, w, h in labels:
+        lx0, ly0, lx1, ly1 = xc - w / 2, yc - h / 2, xc + w / 2, yc + h / 2
+        if lx0 <= cx <= lx1 and ly0 <= cy <= ly1:
+            return True
+        iw = max(0.0, min(box[2], lx1) - max(box[0], lx0))
+        ih = max(0.0, min(box[3], ly1) - max(box[1], ly0))
+        inter = iw * ih
+        union = (box[2] - box[0]) * (box[3] - box[1]) + w * h - inter
+        if union > 0 and inter / union >= 0.2:
+            return True
+    return False
 
 
 def compute_labels(wp: WindowPlan, lons: np.ndarray, lats: np.ndarray, courts: CourtLayer, gsd: float,
@@ -343,13 +458,16 @@ def compute_labels(wp: WindowPlan, lons: np.ndarray, lats: np.ndarray, courts: C
     S = float(wp.out_size)
     boxes: list[list[tuple[float, float, float, float]]] = [[] for _ in range(n)]
     refs: list[list[str]] = [[] for _ in range(n)]
+    kinds: list[list[str]] = [[] for _ in range(n)]
     ambiguous = np.zeros(n, dtype=bool)
+    hard = np.zeros(n, dtype=bool)
+    amb_extra = np.zeros(n, dtype=bool)
     q = lonlat_boxes(lons, lats, wp.out_size * gsd / 2 + point_pad_m + 10)
     ci, cj = courts.tree.query(q, predicate="intersects")
     keep = (courts.role[cj] != "ignore") & (wp.item[ci] >= 0)
     ci, cj = ci[keep], cj[keep]
     if not len(ci):
-        return LabelResult(boxes, refs, ambiguous)
+        return LabelResult(boxes, refs, ambiguous, hard, amb_extra, kinds)
     xmin = np.empty(len(ci))
     xmax = np.empty(len(ci))
     ymin = np.empty(len(ci))
@@ -384,8 +502,9 @@ def compute_labels(wp: WindowPlan, lons: np.ndarray, lats: np.ndarray, courts: C
     is_point = (full_w * full_h) < 1e-6
     pad_px = point_pad_m / gsd
     point_in = is_point & (c0 > -pad_px) & (c0 < S + pad_px) & (r0 > -pad_px) & (r0 < S + pad_px)
+    kind = courts.kind[cj] if courts.kind is not None else np.full(len(cj), "osm", dtype=object)
     amb_hit = (role == "ambiguous") & (((vis_w > 0) & (vis_h > 0) & ~is_point) | point_in)
-    ambiguous[np.unique(ci[amb_hit])] = True
+    ambiguous[np.unique(ci[amb_hit & (kind == "osm")])] = True
     visible = vis_w * vis_h / np.maximum(full_w * full_h, 1e-6)
     lab = (role == "label") & (visible >= min_visible) & (vis_w >= min_box_px) & (vis_h >= min_box_px)
     for k in np.flatnonzero(lab):
@@ -393,7 +512,20 @@ def compute_labels(wp: WindowPlan, lons: np.ndarray, lats: np.ndarray, courts: C
         boxes[i].append((float((vc0[k] + vc1[k]) / 2 / S), float((vr0[k] + vr1[k]) / 2 / S),
                          float(vis_w[k] / S), float(vis_h[k] / S)))
         refs[i].append(str(courts.ref[cj[k]]))
-    return LabelResult(boxes, refs, ambiguous)
+        kinds[i].append(str(kind[k]))
+    # extra "maybe" boxes make the chip ambiguous unless a label already covers them; extra "hard" boxes (mostly
+    # visible, not on a label) mark a hard negative
+    px_boxes = [[(xc * S, yc * S, w * S, h * S) for xc, yc, w, h in b] for b in boxes]
+    for k in np.flatnonzero(amb_hit & (kind != "osm")):
+        i = ci[k]
+        if not _overlaps_any((vc0[k], vr0[k], vc1[k], vr1[k]), px_boxes[i]):
+            ambiguous[i] = True
+            amb_extra[i] = True
+    for k in np.flatnonzero((role == "hard") & (visible >= 0.5)):
+        i = ci[k]
+        if not _overlaps_any((vc0[k], vr0[k], vc1[k], vr1[k]), px_boxes[i]):
+            hard[i] = True
+    return LabelResult(boxes, refs, ambiguous, hard, amb_extra, kinds)
 
 
 def plan_extra_negatives(path: Path, plan: Plan) -> int:
@@ -462,6 +594,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--neg-ratio", type=float, default=1.0)
     ap.add_argument("--neg-mix", default=DEFAULT_NEG_MIX, help=f"kind=weight,... (v2 used: {V2_NEG_MIX})")
     ap.add_argument("--exclude-labels", type=Path, help="text file of OSM refs (way/123) whose polygons are wrong")
+    ap.add_argument("--remove-labels", type=Path, help="text file of OSM refs that are background (label_clean removed)")
+    ap.add_argument("--extra-courts", type=Path, help="v3 extra label layer (GeoParquet from `v3 layers`)")
+    ap.add_argument("--extra-offsets", type=int, default=3, help="chips per official extra court")
+    ap.add_argument("--extra-repeat", type=int, default=4, help="list official-court chips this many times (train)")
+    ap.add_argument("--hard-repeat", type=int, default=2, help="list hard-negative chips this many times (train)")
+    ap.add_argument("--holdout-zones", type=Path, help="GeoJSON/GeoParquet polygons no train/val_us chip may touch")
+    ap.add_argument("--train-list", default="train_v3.txt", help="repeated training list written with --extra-courts")
     ap.add_argument("--extra-negatives", type=Path, help="CSV lon,lat,state[,kind,source]: extra negative chips (train)")
     ap.add_argument("--no-osm-samples", action="store_true",
                     help="plan only --extra-negatives (e.g. a small add-on dataset)")
@@ -496,18 +635,24 @@ def main(argv: list[str] | None = None) -> None:
         (out / sub).mkdir(parents=True, exist_ok=True)
 
     chip_half_m = args.chip_size * args.gsd / 2
-    exclude: set[str] = set()
-    if args.exclude_labels:
-        exclude = {ln.strip() for ln in args.exclude_labels.read_text(encoding="utf-8").splitlines()
-                   if ln.strip() and not ln.startswith("#")}
-    courts = load_court_layer(args.courts, args.container_max_area, exclude)
+    def ref_list(path: Path | None) -> set[str]:
+        if path is None:
+            return set()
+        return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+
+    exclude = ref_list(args.exclude_labels)
+    courts = load_court_layer(args.courts, args.container_max_area, exclude, ref_list(args.remove_labels))
     plan = Plan()
     states = States.load(args.states_file)
     neg_by_kind: Counter[str] = Counter()
     if not args.no_osm_samples:
+        # negatives are sampled against OSM courts only (as in v2); the extra layer only changes the labels
         pos_per_state = plan_positives(courts, plan, chip_half_m, args.jitter, args.max_positives, rng)
         neg_by_kind = plan_negatives(args.context, courts, plan, pos_per_state, args.neg_ratio, parse_mix(args.neg_mix),
                                      args.min_court_dist, args.hard_min_dist, args.seed, states)
+    if args.extra_courts:
+        courts = merge_extra_courts(courts, args.extra_courts)
+        plan_extra_positives(courts, plan, chip_half_m, args.jitter, args.extra_offsets, rng)
     n_extra_start = len(plan)
     if args.extra_negatives:
         neg_by_kind["extra"] += plan_extra_negatives(args.extra_negatives, plan)
@@ -527,9 +672,17 @@ def main(argv: list[str] | None = None) -> None:
     wp = plan_windows(cat, item, lons, lats, args.chip_size, args.gsd)
     labels = compute_labels(wp, lons, lats, courts, args.gsd, args.min_visible, args.min_box_px)
     keep = item >= 0
-    skipped["ambiguous_court_in_chip"] = int((labels.ambiguous & keep).sum())
+    amb_x = labels.ambiguous_extra if labels.ambiguous_extra is not None else np.zeros(n, bool)
+    skipped["ambiguous_court_in_chip"] = int((labels.ambiguous & ~amb_x & keep).sum())
+    if args.extra_courts:
+        skipped["likely_unlabelled_court_in_chip"] = int((amb_x & keep).sum())
     keep &= ~labels.ambiguous
     n_lab = np.array([len(b) for b in labels.boxes])
+    ckind = np.array(plan.center_kind, dtype=object)
+    official_chip = ckind == "official"
+    lost_official = keep & official_chip & np.array([plan.source[i] not in labels.refs[i] for i in range(n)])
+    skipped["official_target_not_boxed"] = int(lost_official.sum())
+    keep &= ~lost_official
     lost_target = keep & (kind == "pos") & (n_lab == 0)
     skipped["positive_target_not_boxed"] = int(lost_target.sum())
     keep &= ~lost_target
@@ -547,6 +700,14 @@ def main(argv: list[str] | None = None) -> None:
     for i in np.flatnonzero(~in_val & ~is_extra):
         if cell_split(lats[i], lons[i], args.val_us_frac, args.seed):
             split[i] = "val_us"
+    if args.holdout_zones:
+        from .v3 import load_polygons
+
+        zones = shapely.union_all(load_polygons(args.holdout_zones))
+        shapely.prepare(zones)
+        in_zone = (split != "val") & shapely.intersects(zones, boxes)
+        skipped["holdout_zone"] = int((in_zone & keep).sum())
+        keep &= ~in_zone
     if is_extra.any():
         # extra negatives always train, but never next to a held-out (val) or val_us chip
         held = np.flatnonzero(keep & ((split == "val") | (split == "val_us")))
@@ -613,16 +774,37 @@ def main(argv: list[str] | None = None) -> None:
         log.warning("read errors: %s", dict(errors.most_common(10)))
 
     ok_idx = np.array([i for i in idx if status[i] == "ok"], dtype=np.int64)
+    # ---- v3 training list: official-court chips and hard negatives repeated
+    hard_chip = (labels.hard if labels.hard is not None else np.zeros(n, bool)) & (kind == "neg")
+    repeat = np.ones(n, dtype=np.int64)
+    repeat[official_chip] = max(1, args.extra_repeat)
+    repeat[hard_chip & ~official_chip] = max(1, args.hard_repeat)
+    if args.extra_courts:
+        tr = ok_idx[split[ok_idx] == "train"]
+        lines = [(out / "images" / "train" / f"{names[i]}.jpg").resolve().as_posix() for i in tr]
+        extra_lines = [(out / "images" / "train" / f"{names[i]}.jpg").resolve().as_posix()
+                       for i in tr for _ in range(int(repeat[i]) - 1)]
+        random.Random(args.seed).shuffle(extra_lines)
+        (out / args.train_list).write_text("\n".join(lines + extra_lines) + "\n", encoding="utf-8", newline="\n")
+        (out / "data_v3.yaml").write_text(
+            f"# v3 training list ({args.train_list}: official-court chips x{args.extra_repeat}, hard negatives "
+            f"x{args.hard_repeat}); model selection on val_us\npath: {out.resolve().as_posix()}\ntrain: {args.train_list}\n"
+            f"val: images/val_us\nnames:\n  0: court\n", encoding="utf-8")
     # ---- manifest + stats
     with gzip.open(out / "manifest.csv.gz", "wt", encoding="utf-8", newline="") as fh:
         wr = csv.writer(fh)
-        wr.writerow(["name", "split", "kind", "center_kind", "state", "lat", "lon", "source", "n_labels", "label_refs",
-                     "naip_item", "naip_year", "naip_date", "native_gsd", "valid"])
+        head = ["name", "split", "kind", "center_kind", "state", "lat", "lon", "source", "n_labels", "label_refs",
+                "naip_item", "naip_year", "naip_date", "native_gsd", "valid"]
+        v3 = bool(args.extra_courts)
+        wr.writerow(head + (["label_kinds", "hard", "repeat"] if v3 else []))
         for i in ok_idx:
             it = int(item[i])
-            wr.writerow([names[i], split[i], kind[i], plan.center_kind[i], st[i], f"{lats[i]:.6f}", f"{lons[i]:.6f}",
-                         plan.source[i], len(labels.boxes[i]), ";".join(labels.refs[i]), cat.ids[it], int(cat.years[it]),
-                         cat.date_str(it), float(cat.gsd[it]), round(float(valid_frac[i]), 4)])
+            row = [names[i], split[i], kind[i], plan.center_kind[i], st[i], f"{lats[i]:.6f}", f"{lons[i]:.6f}",
+                   plan.source[i], len(labels.boxes[i]), ";".join(labels.refs[i]), cat.ids[it], int(cat.years[it]),
+                   cat.date_str(it), float(cat.gsd[it]), round(float(valid_frac[i]), 4)]
+            if v3:
+                row += [";".join(labels.kinds[i]) if labels.kinds else "", int(hard_chip[i]), int(repeat[i])]
+            wr.writerow(row)
     stats: dict[str, Any] = {"splits": {}}
     for sp in ("train", "val", "val_us"):
         m = ok_idx[split[ok_idx] == sp]
@@ -640,6 +822,16 @@ def main(argv: list[str] | None = None) -> None:
         years_by_state[str(st[i])][int(cat.years[int(item[i])])] += 1
     stats["naip_years_by_state"] = {s: dict(sorted(c.items())) for s, c in sorted(years_by_state.items())}
     stats["naip_year_used_by_state"] = {s: max(c, key=lambda y: c[y]) for s, c in sorted(years_by_state.items())}
+    if args.extra_courts:
+        v3s: dict[str, Any] = {}
+        for sp in ("train", "val", "val_us"):
+            m = ok_idx[split[ok_idx] == sp]
+            kc: Counter[str] = Counter()
+            for i in m:
+                kc.update(labels.kinds[i] if labels.kinds else [])
+            v3s[sp] = {"label_boxes_by_kind": dict(kc), "official_chips": int(official_chip[m].sum()),
+                       "hard_negative_chips": int(hard_chip[m].sum()), "list_lines": int(repeat[m].sum())}
+        stats["v3"] = v3s
     stats["planned"] = {"chips": n, "positives": int((kind == "pos").sum()), "negatives": int((kind == "neg").sum()),
                         "negatives_by_kind": dict(neg_by_kind), "excluded_labels": len(exclude),
                         "neg_mix": args.neg_mix, "extra_negatives": int(is_extra.sum())}

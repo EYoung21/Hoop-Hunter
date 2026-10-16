@@ -35,7 +35,7 @@ import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow as pa
@@ -247,7 +247,7 @@ def done_marker_stats(results: Path, out: Path) -> dict[str, Counter[str]]:
     scanned: dict[str, Counter[str]] = {}
     hosts: dict[str, dict[str, Any]] = {}
     for sdir in sorted(p for p in results.iterdir() if p.is_dir() and not p.name.startswith("_")):
-        c = scanned.setdefault(sdir.name, Counter())
+        c: Any = scanned.setdefault(sdir.name, Counter())  # counts plus summed seconds (float)
         for mk in sdir.glob("*.done.json"):
             r = json.loads(mk.read_text(encoding="utf-8"))
             c["items"] += 1
@@ -313,7 +313,7 @@ def cmd_summarize(args: argparse.Namespace) -> None:
         scanned = done_marker_stats(args.results, args.out)
     plan_st: dict[str, Counter[str]] = {}
     for s_, kt, zk in zip(plan["state"], plan["kept_tiles"], plan["zone_km2"]):
-        c = plan_st.setdefault(s_, Counter())
+        c = cast(Any, plan_st.setdefault(s_, Counter()))  # tiles (int) and km2 (float)
         c["items"] += 1
         c["tiles"] += int(kt)
         c["km2"] += float(zk)
@@ -328,16 +328,18 @@ def cmd_summarize(args: argparse.Namespace) -> None:
         cls = d["privacy"][m]
         r = rec.get(s_, {})
         row: dict[str, Any] = {
-            "state": s_, "name": names.get(s_, s_), "items_planned": plan_st.get(s_, {}).get("items", 0),
-            "items_scanned": scanned.get(s_, {}).get("items", 0), "km2": round(plan_st.get(s_, {}).get("km2", 0.0)),
-            "tiles_planned": plan_st.get(s_, {}).get("tiles", 0), "tiles_scanned": scanned.get(s_, {}).get("tiles", 0),
+            "state": s_, "name": names.get(s_, s_), "items_planned": plan_st.get(s_, Counter()).get("items", 0),
+            "items_scanned": scanned.get(s_, Counter()).get("items", 0),
+            "km2": round(plan_st.get(s_, Counter()).get("km2", 0.0)),
+            "tiles_planned": plan_st.get(s_, Counter()).get("tiles", 0),
+            "tiles_scanned": scanned.get(s_, Counter()).get("tiles", 0),
             "candidates": int(m.sum()), **{f"cand_ge_{k}": v for k, v in band_counts(conf).items()},
             **{f"{c}_ge_0.5": int(((cls == c) & (conf >= 0.5)).sum())
                for c in ("public", "residents_only", "private_home", "unknown", "restricted")},
             "osm_courts_labelable_in_scan": r.get("courts", 0),
             **{f"recall_{k}": r.get(k) for k in ("0.10", "0.25", "0.50", "0.60", "0.70")},
             "osm_features": sum(osm_priv.get(s_, {}).values()),
-            **{f"osm_{c}": osm_priv.get(s_, {}).get(c, 0) for c in ("public", "unknown", "residents_only", "private_home",
+            **{f"osm_{c}": osm_priv.get(s_, Counter()).get(c, 0) for c in ("public", "unknown", "residents_only", "private_home",
                                                                     "restricted")},
         }
         rows.append(row)
@@ -472,7 +474,8 @@ def cmd_score(args: argparse.Namespace) -> None:
     for c_min in args.conf_min:
         for v_min in args.verify_min:
             def keep(it: dict[str, Any], c_min: float = c_min, v_min: float = v_min) -> bool:
-                return it["conf"] >= c_min and (it.get(vcol) if it.get(vcol) is not None else -1.0) >= v_min
+                v = it.get(vcol)
+                return bool(it["conf"] >= c_min and (v if v is not None else -1.0) >= v_min)
             p, exp_c, pop = _estimate(items, strata, keep, False)
             p2, _, _ = _estimate(items, strata, keep, True)
             boots = sorted(v for v in (_estimate(items, strata, keep, False, rng)[0] for _ in range(1000)) if v == v)
@@ -495,13 +498,16 @@ def cmd_score(args: argparse.Namespace) -> None:
 def cmd_app_ready(args: argparse.Namespace) -> None:
     from .export_app import SITE_VALUES, _feature, osm_features, validate
 
-    t = pq.read_table(args.out / "candidates_us.parquet",
-                      columns=["id", "state", "lon", "lat", "conf", "verify", "verify_scan", "conf2", "p_home", "privacy",
-                               "site"])
+    cols = ["id", "state", "lon", "lat", "conf", "verify", "verify_scan", "conf2", "p_home", "privacy", "site"]
+    if args.flag_col:
+        cols.append(args.flag_col)
+    t = pq.read_table(args.out / "candidates_us.parquet", columns=cols)
     d = {k: t.column(k).to_numpy(zero_copy_only=False) for k in t.column_names}
     ver = np.nan_to_num(d[args.verify_col].astype(float), nan=-1.0)
     c2 = np.nan_to_num(d["conf2"].astype(float), nan=-1.0)
     sel = (d["privacy"] == "public") & (d["conf"] >= args.min_conf) & (ver >= args.min_verify) & (c2 >= args.min_conf2)
+    if args.flag_col:  # a selection made elsewhere (v3 select: per-state verifier thresholds)
+        sel &= d[args.flag_col].astype(bool)
     if args.require_phome:  # only candidates whose home-lot check included the context CNN
         sel &= np.isfinite(d["p_home"].astype(float))
     names = state_names(args.states_file)
@@ -512,11 +518,15 @@ def cmd_app_ready(args: argparse.Namespace) -> None:
                                                  "min_verify": args.min_verify, "verify_col": args.verify_col,
                                                  "min_conf2": args.min_conf2, "require_phome": args.require_phome},
                              "updated": updated, "states": {}}
+    if args.flag_col:
+        rule = args.out / "selection.json"
+        index["operating_point"] = {"flag_col": args.flag_col,
+                                    **(json.loads(rule.read_text(encoding="utf-8"))["rule"] if rule.exists() else {})}
     exported: list[np.ndarray] = []
     for code in sorted(names):
         label = state_slug(names[code])
         osm_file = args.osm_dir / f"courts_{code}.geojson"
-        priv_file = args.out / "osm_privacy" / f"{code}.json"
+        priv_file = (args.osm_privacy_dir or args.out / "osm_privacy") / f"{code}.json"
         osm = []
         if osm_file.exists():
             priv = json.loads(priv_file.read_text(encoding="utf-8")) if priv_file.exists() else None
@@ -740,6 +750,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--min-conf2", type=float, default=-1.0)
     p.add_argument("--verify-col", default="verify", choices=["verify", "verify_scan"])
     p.add_argument("--require-phome", action="store_true", help="only candidates the context CNN scored")
+    p.add_argument("--flag-col", help="also require this boolean column (e.g. `export` from `v3 select`)")
+    p.add_argument("--osm-privacy-dir", type=Path, help="OSM privacy classes (default <out>/osm_privacy)")
     p.add_argument("--updated", default=dt.date.today().isoformat())
     common(p)
     p = sub.add_parser("truth-eval")

@@ -124,6 +124,30 @@ def pr_table(preds: list[dict[str, Any]], gts: list[np.ndarray], thresholds: lis
     return rows
 
 
+def background_by_kind(root: Path, preds: list[dict[str, Any]], gts: list[np.ndarray],
+                       thresholds: tuple[float, ...] = (0.3, 0.5, 0.7)) -> dict[str, Any]:
+    """Share of background-only chips firing at each threshold, per chip-centre kind from the dataset manifest
+    (random_land and residential chips rarely hold a court, so their rate is the cleanest false-alarm measure)."""
+    import csv
+    import gzip
+
+    man = root / "manifest.csv.gz"
+    if not man.exists():
+        return {}
+    with gzip.open(man, "rt", encoding="utf-8", newline="") as fh:
+        kinds = {r["name"]: r["center_kind"] for r in csv.DictReader(fh)}
+    acc: dict[str, list[float]] = {}
+    for p, g in zip(preds, gts):
+        if len(g):
+            continue
+        k = kinds.get(p["path"].stem)
+        if k is None:
+            continue
+        acc.setdefault(k, []).append(float(p["conf"].max()) if len(p["conf"]) else 0.0)
+    return {k: {"chips": len(v), **{f"{t:.2f}": round(float((np.asarray(v) >= t).mean()), 4) for t in thresholds}}
+            for k, v in sorted(acc.items())}
+
+
 def draw(path: Path, gt: np.ndarray, pred: np.ndarray, conf: np.ndarray, title: str) -> Image.Image:
     im = Image.open(path).convert("RGB")
     d = ImageDraw.Draw(im)
@@ -215,6 +239,9 @@ def main(argv: list[str] | None = None) -> None:
                               "iou30": rec, "iou50": next(r for r in strict if r["conf"] == rec["conf"])}
     n_gt = sum(len(g) for g in gts)
     summary["gt_boxes"] = n_gt
+    by_kind = background_by_kind(root, preds, gts)
+    if by_kind:
+        summary["background_by_kind"] = by_kind
     summary["background_chips"] = sum(1 for g in gts if not len(g))
     log.info("%-6s %-22s %-22s %s", "conf", "IoU0.5 P/R/F1", "IoU0.3 P/R/F1", "bg chips firing")
     for s, lo in zip(strict, loose):

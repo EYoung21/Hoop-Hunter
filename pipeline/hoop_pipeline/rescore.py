@@ -14,6 +14,9 @@ chip centred on the box (cached as JPEG in --chips-dir, so a rerun only scores),
   contain its centre (0 when it sees nothing there);
 * ``verify``: the box verifier (cropcls, ResNet-18 on the candidate box with 1.6x context);
 * ``p_home``: the context CNN on the central 160 m (feed it to ``privacy classify --p-home``).
+
+``--fetch-only`` only fills the chip cache (no models), e.g. while the new detector is still training;
+``--score-col conf3`` names the detector column for a v3 rescore.
 """
 
 from __future__ import annotations
@@ -75,6 +78,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--batch", type=int, default=32, help="chips per detector / classifier batch")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--shard", help="K/N: only every N-th candidate (by confidence rank) starting at K")
+    ap.add_argument("--fetch-only", action="store_true", help="only fetch and cache the chips (no models, no output)")
+    ap.add_argument("--score-col", default="conf2", help="output column of the detector's score")
     ap.add_argument("--out", type=Path, required=True)
     add_common_args(ap)
     args = ap.parse_args(argv)
@@ -106,29 +111,46 @@ def main(argv: list[str] | None = None) -> None:
     st = np.asarray(d.get("state") or ["TN"] * len(conf), dtype=object)
     bw, bh = np.asarray(d["box_w_m"], float), np.asarray(d["box_h_m"], float)
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    det = FastDetector(args.weights, imgsz=args.imgsz, device=device, half=device != "cpu")
-    ver = CropClassifier.load(args.verifier) if args.verifier else None
-    ctx = CropClassifier.load(args.context_model) if args.context_model else None
+    det = None if args.fetch_only else FastDetector(args.weights, imgsz=args.imgsz, device=device, half=device != "cpu")
+    ver = CropClassifier.load(args.verifier) if args.verifier and not args.fetch_only else None
+    ctx = CropClassifier.load(args.context_model) if args.context_model and not args.fetch_only else None
     ctx_px = int(round(float(ctx.meta.get("point_m", 160.0)) / config.TARGET_GSD_M)) if ctx else 0
     args.chips_dir.mkdir(parents=True, exist_ok=True)
     from concurrent.futures import ThreadPoolExecutor
 
     save_pool = ThreadPoolExecutor(max_workers=8)
-    res: dict[str, list[Any]] = {k: [] for k in ("id", "conf", "chip_ok", "conf2", "verify", "p_home", "seconds_chunk")}
+    read_pool = ThreadPoolExecutor(max_workers=16)
+
+    def load_chip(path: Path) -> np.ndarray | None:
+        try:
+            with Image.open(path) as im:
+                return np.asarray(im.convert("RGB"))
+        except OSError:  # a chip half-written by a killed run: fetch it again
+            return None
+
+    res: dict[str, list[Any]] = {k: [] for k in ("id", "conf", "chip_ok", args.score_col, "verify", "p_home",
+                                                 "seconds_chunk")}
     fetched = 0
     for k in range(0, len(sel), args.chunk):
         tc = time.monotonic()
         idx = sel[k:k + args.chunk]
         chips = np.zeros((len(idx), CHIP_PX, CHIP_PX, 3), np.uint8)
         ok = np.zeros(len(idx), bool)
-        need = []
-        for j, i in enumerate(idx):
-            p = args.chips_dir / f"{ids[i]}.jpg"
-            if p.exists():
-                chips[j] = np.asarray(Image.open(p).convert("RGB"))
-                ok[j] = True
-            else:
-                need.append(j)
+        cached = [(j, args.chips_dir / f"{ids[i]}.jpg") for j, i in enumerate(idx)]
+        have = [(j, p) for j, p in cached if p.exists()]
+        if args.fetch_only:
+            loaded: list[np.ndarray | None] = [np.zeros(0)] * len(have)  # presence is enough
+        else:
+            loaded = list(read_pool.map(load_chip, [p for _, p in have]))
+        got_j = set()
+        for (j, _), img in zip(have, loaded):
+            if img is None:
+                continue
+            if img.size:
+                chips[j] = img
+            ok[j] = True
+            got_j.add(j)
+        need = [j for j in range(len(idx)) if j not in got_j]
         if need:
             nj = np.asarray(need)
             imgs, got = fetch_chips(lon[idx[nj]], lat[idx[nj]], st[idx[nj]], args.naip_dir, args.workers)
@@ -142,6 +164,10 @@ def main(argv: list[str] | None = None) -> None:
             # JPEG encoding releases the GIL; at national scale a serial save loop costs as much as the fetch
             list(save_pool.map(lambda a: Image.fromarray(a[0]).save(a[1], quality=92), saves))
             del imgs, saves
+        if args.fetch_only or det is None:
+            log.info("%d/%d cached (%d fetched so far), chunk %.1f s, %.0f s total", min(k + args.chunk, len(sel)), len(sel),
+                     fetched, time.monotonic() - tc, time.monotonic() - t0)
+            continue
         conf2 = np.zeros(len(idx))
         verify = np.full(len(idx), np.nan)
         p_home = np.full(len(idx), np.nan)
@@ -169,7 +195,7 @@ def main(argv: list[str] | None = None) -> None:
             res["id"].append(ids[i])
             res["conf"].append(float(conf[i]))
             res["chip_ok"].append(bool(ok[j]))
-            res["conf2"].append(float(conf2[j]) if ok[j] else float("nan"))
+            res[args.score_col].append(float(conf2[j]) if ok[j] else float("nan"))
             res["verify"].append(float(verify[j]))
             res["p_home"].append(float(p_home[j]))
             res["seconds_chunk"].append(round(time.monotonic() - tc, 2))
@@ -177,6 +203,10 @@ def main(argv: list[str] | None = None) -> None:
                  fetched, time.monotonic() - tc, time.monotonic() - t0)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(pa.table(res), args.out, compression="zstd")  # after every chunk: partial results survive
+    if args.fetch_only:
+        log.info("fetched %d chips for %d candidates in %.1f min -> %s", fetched, len(sel), (time.monotonic() - t0) / 60,
+                 args.chips_dir)
+        return
     log.info("rescored %d candidates in %.1f min -> %s", len(sel), (time.monotonic() - t0) / 60, args.out)
 
 

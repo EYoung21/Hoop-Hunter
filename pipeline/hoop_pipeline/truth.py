@@ -226,7 +226,7 @@ def fetch_socrata(sess: requests.Session, domain: str, ds_id: str, where: str | 
     n, offset = 0, 0
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         while True:
-            params = {"$limit": page, "$offset": offset, "$order": ":id"}
+            params: dict[str, Any] = {"$limit": page, "$offset": offset, "$order": ":id"}
             if where:
                 params["$where"] = where
             data = _json(sess.get(base, params=params, timeout=180))
@@ -473,7 +473,7 @@ def _court_count(props: dict, spec: Any) -> int | None:
     raise ValueError(f"bad court_count spec {spec}")
 
 
-def _mapped(props: dict, spec: Any, default: str) -> str:
+def _mapped(props: dict, spec: Any, default: Any) -> Any:
     """{"field": F, "map": {raw: value}, "default": d, "regex_map": [[regex, value], ...]} or a constant string."""
     if spec is None:
         return default
@@ -535,7 +535,7 @@ def normalise_source(spec: dict) -> tuple[dict[str, list], dict]:
         raise FileNotFoundError(f"{path} missing; run `truth refresh --sources {key}`")
     f = spec.get("fields", {})
     cols: dict[str, list] = defaultdict(list)
-    stats = Counter()
+    stats: Counter[str] = Counter()
     seen_ids: Counter = Counter()
     for i, feat in enumerate(iter_geojsonl(path)):
         stats["raw_rows"] += 1
@@ -573,7 +573,8 @@ def normalise_source(spec: dict) -> tuple[dict[str, list], dict]:
             sid = f"{sid}~{seen_ids[sid]}"
         precision = _mapped(props, f.get("precision"), spec["precision"])
         # a polygon is a court footprint only for court-level sources (park-level rows carry the park polygon)
-        footprint = geom if geom.geom_type in ("Polygon", "MultiPolygon") and precision == "court_polygon" else None
+        footprint = geom if (geom is not None and geom.geom_type in ("Polygon", "MultiPolygon")
+                             and precision == "court_polygon") else None
         public = spec.get("public", True)
         if f.get("public") is not None:
             public = _mapped(props, f["public"], "unknown")
@@ -605,7 +606,7 @@ def normalise_source(spec: dict) -> tuple[dict[str, list], dict]:
     return cols, dict(stats)
 
 
-def load_coverage(spec: dict) -> tuple[list[str], list[str], list[Any]]:
+def load_coverage(spec: dict) -> tuple[list[str], list[str | None], list[Any]]:
     """(coverage_id, name, polygon) for one source's coverage layer (dissolved by id)."""
     key = spec["key"]
     cov = spec.get("coverage") or {}
@@ -686,7 +687,7 @@ def build(sources: list[dict]) -> dict:
         xy = Counter(zip(np.round(cols["lon"], 6), np.round(cols["lat"], 6))) if n else Counter()
         cols["same_xy"] = [xy[(round(a, 6), round(b, 6))] for a, b in zip(cols["lon"], cols["lat"])]
         fp = cols.pop("_footprint")
-        area = [None] * n
+        area: list[float | None] = [None] * n
         if n:
             fpm = to_m(np.asarray([g if g is not None else shapely.Point() for g in fp], dtype=object))
             area = [float(shapely.area(g)) if f is not None else None for g, f in zip(fpm, fp)]
@@ -763,9 +764,10 @@ def build(sources: list[dict]) -> dict:
     }
     if MANIFEST_FILE.exists():  # keep the OSM comparison from the last osm-compare run
         old = read_json(MANIFEST_FILE)
+        msrc: dict[str, Any] = manifest_sources
         for k, v in old.get("sources", {}).items():
-            if k in manifest["sources"] and "osm" in v:
-                manifest["sources"][k]["osm"] = v["osm"]
+            if k in msrc and "osm" in v:
+                msrc[k]["osm"] = v["osm"]
     write_json(MANIFEST_FILE, manifest)
     log.info("truth: %d rows from %d sources -> %s; %d coverage polygons -> %s", len(all_cols["truth_id"]),
              len(manifest_sources), COURTS_FILE, len(cg), COVERAGE_FILE)
@@ -846,7 +848,7 @@ def osm_compare(radius: float, park_radius: float) -> dict:
     TRUTH_DIR.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.table({
         "truth_id": pa.array(cols["truth_id"]),
-        "nearest_osm_ref": pa.array(refs.tolist()),
+        "nearest_osm_ref": pa.array(list(refs)),
         "nearest_osm_m": pa.array(np.where(np.isfinite(near_d), np.round(near_d, 1), np.nan)),
         "n_osm_within_r": pa.array(n_within.astype(np.int32)),
         "osm_within_r": pa.array(n_within > 0),
@@ -1123,7 +1125,7 @@ def export_labels(out: Path, radius: float, min_area: float = 0.0) -> int:
     m = pq.read_table(OSM_MATCH_FILE).to_pydict()
     near = dict(zip(m["truth_id"], m["nearest_osm_m"]))
     nwr = dict(zip(m["truth_id"], m["n_osm_within_r"]))
-    feats = []
+    feats: list[dict[str, Any]] = []
     for i, tid in enumerate(cols["truth_id"]):
         if not (cols["tier"][i] == "official" and cols["status"][i] in ("active", "unknown") and cols["feature"][i] == "court"
                 and cols["indoor"][i] not in HIDDEN and cols["precision"][i] in ("court_polygon", "court_point")

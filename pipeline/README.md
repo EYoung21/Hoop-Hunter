@@ -32,6 +32,11 @@ scan_engine plan ─► partition ─► run (N nodes) ─► merge ─► priva
 gold sample/fetch/annotate/export ─► tools/label/index.html (human labels) ─► gold score
 ```
 
+**v3 (2026-10-16)** trains on official courts OSM lacks and labels every known court in every chip, and is graded on
+five truth sources it never saw. It finds more held-out courts OSM lacks at the same threshold, but not at the same
+precision, so **v2 stays the detector**. The national candidates were re-scored, and per-state verifier thresholds
+give a more even export: 5,924 candidates at 0.95 reviewed precision. See [v3](#v3-courts-osm-misses-2026-10-16).
+
 Everything lives in `pipeline/`. The only file written outside it is
 `../app/assets/data/courts.geojson` (by `export_app`).
 
@@ -2267,6 +2272,370 @@ python -m hoop_pipeline.national truth-eval
 * **OSM data is not the latest.** `data/osm_us/courts_us.parquet` is the 2026-10-06 Geofabrik extract from run 1
   (101,098 courts). Run 2 described a 2026-10-08 extract with 101,217.
 
+## v3: courts OSM misses (2026-10-16)
+
+v1 and v2 learned only from OSM courts. Courts OSM tends to miss (unmarked school blacktops, apartment
+courts, faded park courts) were never positives, and some sat in the background of training chips as
+"nothing". v2 even listed some of them twice: a school chip whose unlabelled court v1 scored 0.1–0.45
+counted as a hard negative. v3 changes the labels, not the model:
+
+* **Official courts OSM lacks become labels**, snapped to a visible court box on NAIP, from truth
+  sources that are not used for testing.
+* **Every chip is labelled with every court we know of**: OSM, the snapped official courts, and v2's most
+  certain public detections (pseudo-labels).
+* **A chip that shows a likely court nobody labelled is dropped** instead of teaching the model that the
+  court is background. Hard negatives are kept only where the verifier agrees the box is not a court.
+* **v3 is graded on whole truth sources it never saw**, plus Tennessee as before.
+
+`hoop_pipeline/v3.py` holds the steps; `build_dataset_us.py` gained `--extra-courts`, `--remove-labels`,
+`--holdout-zones`, `--extra-offsets`, `--extra-repeat` and `--hard-repeat`; `rescore.py` gained
+`--fetch-only` and `--score-col`; `evaluate.py` reports background firing per chip kind;
+`national app-ready` gained `--flag-col` and `--osm-privacy-dir`. `cloud/v3_node.sh` runs the node side.
+
+```
+truth set ─► v3 split ─► v3 snap ─► review by eye ─┐
+national v2 scan (candidates, detections) ─► v3 layers ─┴─► build_dataset_us --extra-courts ─► train (from v2)
+v3 heldout-items ─► scan_engine run v1 / v2 / v3 ─► v3 heldout-eval          evaluate (TN holdout) ◄─┤
+rescore (v3 on every candidate) ─► v3 merge-rescore ─► v3 calibrate / grid / select ─► national app-ready
+```
+
+### Honest split (`v3 split`, `data/v3/split.json`)
+
+Five whole truth sources are held out, plus all of Tennessee as before. DC and Ramsey County are the only
+all-owner planimetric layers big enough to score school, apartment and home courts. Boston, Columbus and
+Nashville are on-court point layers of park departments.
+
+| side | sources | court-level records | at least 150 m² | OSM lacks | OSM lacks, at least 150 m² |
+|---|---|---|---|---|---|
+| test | dc_planimetrics, ramsey_county_planimetrics, boston_bprd, columbus_crpd, nashville_metro_parks | 1,050 | 700 | 533 | **203** (DC 72, Ramsey 76, Boston 22, Columbus 19, Nashville 14) |
+| train (label sources) | the other 18 court-level sources | 3,182 | 2,634 | 473 | 313 |
+
+* Held-out sources give no labels. **No training chip may touch a held-out zone**: the union of each
+  held-out source's coverage polygons and records, buffered 100 m (`data/v3/holdout_zones.geojson`;
+  1,464 chips dropped). Tennessee stays the `val` split, with the 250 m border buffer as before.
+* v1 and v2 did train on chips inside these areas (OSM positives), so on the held-out sources' courts OSM
+  has, the comparison favours v1 and v2. On courts OSM lacks it does not: none of the three models ever
+  saw them labelled.
+* No extra label (official, pseudo, maybe, hard) lies in a held-out zone or within 1 km of Tennessee, so
+  the Tennessee holdout chips stay labelled by OSM alone.
+
+### New labels
+
+**Official courts OSM lacks, snapped** (`v3 snap`, `data/v3/snapped.parquet`, review sheets in
+`out/v3/snap_review/`). Candidates are the `truth export-labels` rule (on-court polygon or point, live,
+visible, not marked non-public, no OSM basketball feature within 40 m) with an area of at least 150 m²
+where one is known, from training sources only: **290 records**. For each, a 192 m NAIP chip centred on the
+court is scored with v2 (CPU, conf ≥ 0.01) and the verifier.
+
+* **Polygon sources:** the polygon's box is the label, but only where v2 sees at least a faint court on it
+  (a box with IoU ≥ 0.2 at conf ≥ 0.1). A polygon over several courts (courts > 1, or > 1,100 m²) that v2
+  boxes one by one becomes those boxes (2 records).
+* **On-court point sources:** the best v2 box whose centre is within 25 m of the point, or that contains
+  the point (5 m), at conf ≥ 0.1. Otherwise the record is dropped.
+* **Skipped:** park-level and feature-point sources (LA County, Santa Ana, Boulder, RI SCORP, BREC,
+  Lexington, MA DCR, Syracuse), and **Raleigh** (see below).
+
+What the review found (every record was drawn with its polygon, point, label box and v2 boxes; all 15
+sheets were looked at):
+
+* **Raleigh polygons are not courts on NAIP.** Of its 28 records, most sit in forest, back yards or a
+  construction site. Raleigh gives no labels.
+* **Many official courts OSM lacks are invisible.** NYC lists courts under highway ramps and elevated
+  tracks, under full canopy and on construction sites. The first rule (polygon box as is) would have
+  labelled them all, which is why polygons need v2's agreement.
+* **The verifier cannot decide this.** On arbitrary boxes (forest, ramps, roofs) it is out of distribution
+  and often scores above 0.95. It plays no part in the final rule.
+* **Boxes v2 scores below 0.1 were mostly slabs, parking or playgrounds**, so the agreement threshold went
+  from 0.02 to 0.1 (20 boxes dropped).
+* **Roofs:** three Austin courts under blue shade roofs that the source does not mark covered, and one
+  Oklahoma City pavilion, are excluded by hand (`data/v3/snap_exclude.txt`).
+
+| | records | kept | dropped |
+|---|---|---|---|
+| nyc_parks (polygons) | 154 | 83 | 71 (no v2 box on the polygon) |
+| denver_dpr, pittsburgh_courts, sf_rpd, san_jose_prns, seattle_spr, college_station_parks, tempe_courts, cambridge_sports_areas (polygons) | 49 | 35 (2 split into 4 boxes) | 14 (all 5 Cambridge) |
+| chicago_parks, austin_apr, okc_parks, cleveland_parks, sioux_falls_parks, phoenix_pard (points) | 59 | 26 | 33 (no v2 box near the point or under 0.1: 29; roofs by review: 4) |
+| raleigh_prcr | 28 | 0 | 28 (source skipped) |
+| **all** | **290** | **144 records, 146 boxes** | **146** |
+
+After removing three records that snapped to the same box as a neighbour, **143 official boxes** remain; 4 of them turned out to be in the fresh OSM extract, so about 139 are new labels. Looking at 60 kept labels across sources, roughly 9 in 10 are visibly courts; the rest are dark or shaded slabs.
+
+**Pseudo-labels** (`v3 layers`): v2's public candidates at the v2 export point (conf ≥ 0.5, in-scan verifier
+≥ 0.98, context CNN scored and p_home < 0.5): **5,292** outside the held-out zones. Why they are safe enough:
+the blind review of 100 exported candidates found 57 courts, 2 not, 41 unsure (unmarked blacktops, mostly with
+hoop-pole dots), and in covered parks 29 of 30 matched an official court. They are used only to label chips
+that already exist; no chip is centred on one, so v3 is not trained to repeat v2's own choices.
+
+**Likely courts nobody labelled ("maybe", chip dropped)** and **look-alikes ("hard")**, from every national
+v2 detection, including those near OSM courts:
+
+* maybe: (conf ≥ 0.25 and verifier ≥ 0.8) or (conf ≥ 0.45 and verifier ≥ 0.5), not a pseudo-label: 244,188.
+  The builder ignores one that an OSM, official or pseudo label covers (74,524 cover an OSM court).
+* hard: conf ≥ 0.1 and verifier < 0.3: 228,969. A negative chip holding one (at least half visible, not on a
+  label) is a hard negative, listed twice. v2 listed twice every negative chip v1 scored from 0.1 up to its drop
+  threshold (14,720), unlabelled courts included; v3 keeps 3,726 whose box the verifier says is not a court.
+
+### Dataset v3 (`datasets/us3`, built on the node)
+
+The fresh Geofabrik extract (2026-10-15: 101,726 CONUS basketball features, 94,500 labelable), v2's negative mix
+and `--neg-ratio 2.0`, v2's removed (6,118, now background) and excluded (5,655, chips dropped) OSM labels, and
+the extra layer. 9.7 min at 453 chips/s.
+
+| split | chips | court-centred | negative-centred | boxes (OSM / official / pseudo) |
+|---|---|---|---|---|
+| train | 224,868 | 74,974 (342 on official courts) | 149,894 (3,726 hard) | 164,328 / 547 / 335 |
+| val (Tennessee, test only, OSM labels) | 2,156 | 716 | 1,440 | 962 / 0 / 0 |
+| val_us (model selection) | 5,379 | 1,980 | 3,399 | 4,044 / 3 / 9 |
+
+* Dropped while planning: 10,244 chips showing a likely unlabelled court, 3,797 showing an OSM court we
+  cannot box, 1,464 in held-out zones, 463 with partial imagery.
+* The training list `train_v3.txt` has 229,620 lines: official-court chips four times, hard negatives twice.
+  The dataset was built with the first snap pass (agreement ≥ 0.02, before the review's roof exclusions). The 67
+  training chips that held one of the 20 boxes the second pass rejected (`data/v3/official_dropped_r2.txt`) were
+  taken out of the list with a one-off script on the node before the final training run; the `v3b` part of
+  `cloud/v3_node.sh` does the same for its relabel.
+* Official labels are few next to 164k OSM boxes: 547 boxes in 1,368 list lines, about 0.6% of the list.
+
+### Training
+
+`weights/best_v3.pt`: yolo11s fine-tuned from v2 at 416 px, batch 192, SGD lr0 0.005 (v2's `optimizer=auto` had
+silently used SGD 0.01), warm-up 1 epoch, close_mosaic 3, 14 epochs (patience 4), 43 min on one A100 80 GB
+(174 s per epoch, no RAM cache). Best epoch 12 on val_us: mAP50 0.802, mAP50-95 0.551. The first training run
+(with the 20 later rejected official boxes) was stopped during its third epoch and restarted on the pruned list
+(`runs/us3-y11s-416_r1/results.csv`).
+
+### v1 / v2 / v3 compared
+
+**Tennessee holdout** (`datasets/us3` val: 2,156 chips, 962 OSM boxes, re-cut from the fresh extract;
+FastDetector, IoU 0.3; `out/v3/eval_tn_<model>/metrics.json`):
+
+| model | mAP50 | mAP50-95 | P / R @ 0.5 | P / R @ 0.6 | P / R @ 0.7 | background chips firing @ 0.5 | … on parking / pickleball / volleyball |
+|---|---|---|---|---|---|---|---|
+| v1 (320 px) | 0.756 | 0.514 | 0.873 / 0.691 | 0.900 / 0.563 | 0.936 / 0.348 | 3.6% | 0% / 6.1% / 15.5% |
+| v2 | 0.755 | 0.513 | 0.881 / 0.640 | 0.900 / 0.543 | 0.931 / 0.408 | **2.6%** | 0% / 0% / 3.4% |
+| v3 | 0.759 | 0.513 | 0.873 / **0.726** | 0.891 / 0.614 | 0.906 / 0.463 | 3.7% | 1.7% / 4.1% / 10.3% |
+| v3b (ablation, below) | 0.757 | 0.516 | 0.859 / 0.707 | 0.877 / 0.614 | 0.903 / 0.472 | 3.7% | 1.1% / 5.1% / 8.6% |
+
+**Held-out truth sources** (DC, Ramsey, Boston, Columbus, Nashville; each model scanned the same 141 NAIP files,
+273,415 tiles, with the scan engine, conf ≥ 0.05, in-scan verifier; `v3 heldout-eval`, `out/v3/heldout_eval.json`).
+Recall is a court-level match within 40 m of a point or 15 m of a polygon. The v2 rescan reproduces the national
+v2 scan's numbers on the same records exactly.
+
+| subset | records | v1 @ 0.1 / 0.5 | v2 @ 0.1 / 0.5 | v3 @ 0.1 / 0.5 | v3b @ 0.1 / 0.5 |
+|---|---|---|---|---|---|
+| all court-level | 1,050 | 0.65 / 0.52 | 0.65 / 0.53 | 0.68 / 0.57 | 0.68 / 0.57 |
+| at least 150 m² | 700 | 0.87 / 0.74 | 0.88 / 0.76 | 0.89 / 0.80 | 0.89 / 0.80 |
+| courts OSM lacks | 533 | 0.38 / 0.22 | 0.37 / 0.21 | 0.42 / 0.27 | 0.41 / 0.27 |
+| **courts OSM lacks, at least 150 m²** | **203** | 0.67 / 0.49 | 0.68 / 0.48 | **0.73 / 0.55** | 0.71 / 0.57 |
+| … of which DC / Ramsey (all-owner) @ 0.5 | 72 / 76 | 0.44 / 0.38 | 0.46 / 0.36 | 0.53 / 0.46 | 0.54 / 0.46 |
+
+| precision | v1 @ 0.5 | v2 @ 0.5 | v3 @ 0.5 | v3b @ 0.5 |
+|---|---|---|---|---|
+| DC + Ramsey: detections inside the planimetric area that match a traced court (any size, any owner) | 0.83 (331/397) | **0.87** (333/384) | 0.77 (383/499) | 0.78 (373/477) |
+| covered parks (Boston, Columbus, Nashville): detections matching an official court | 0.95 (213/225) | 0.96 (221/231) | 0.94 (221/236) | 0.95 (225/237) |
+| … only detections not near an OSM court | 0.80 (35/44) | 0.81 (34/42) | 0.73 (36/49) | 0.80 (39/49) |
+
+**At equal precision v3 is not better.** v3 fires more: 16,155 detections at conf ≥ 0.05 on the held-out files, against
+v2's 8,998.
+Comparing thresholds that give the same DC + Ramsey precision:
+
+| DC + Ramsey precision | v2: threshold, recall on courts OSM lacks (≥ 150 m²) | v3: threshold, recall | v3b: threshold, recall |
+|---|---|---|---|
+| ~0.69–0.72 | 0.20, 0.63 | 0.40, 0.58 | 0.40, 0.59 |
+| ~0.77–0.78 | 0.30, 0.58 | 0.50, 0.55 | 0.50, 0.57 |
+| ~0.86–0.87 | 0.50, 0.48 | 0.65, 0.42 | 0.65, 0.44 |
+| ~0.90–0.91 | 0.60, 0.43 | 0.70, 0.36 | 0.70, 0.38 |
+
+On the Tennessee chips (OSM labels) v3 is slightly ahead at equal precision (about 0.67 recall at v2's 0.881
+precision, interpolated, against v2's 0.640). Once the verifier filter is applied, v2 and v3 find the same share of
+held-out courts OSM lacks (verifier ≥ 0.9, conf ≥ 0.5: 0.305 and 0.315).
+
+**What v3's extra detections are.** In DC and Ramsey, 73 detections at ≥ 0.5 match no traced court and have no v2
+detection ≥ 0.5 within 20 m (v2 has 9 the other way). A blind look at 40 of them (`out/v3/review_heldout_unmatched/`,
+mixed with v2's 9): **3 courts** (back-yard and driveway courts), **26 not** (roofs, plazas, a skate park, a soccer
+pitch, pools, parking, dirt, trees), 11 unsure.
+
+**Ablation v3b: was it the hard negatives?** v3 kept only hard negatives the verifier calls not-a-court (3,726 chips,
+against v2's 14,720). v3b is the same dataset relabelled with v2-style hard negatives: every detection ≥ 0.1 that is
+not a likely court, 9,864 chips (`v3 layers --hard-verify 1.01`, `build_dataset_us --resume`, `cloud/v3_node.sh v3b`).
+It trained the same way: 14 epochs, val_us mAP50 0.799, mAP50-95 0.550, `weights/best_v3b.pt`. **It does not close
+the gap.** On the held-out sources it sits between v3 and v2 at equal precision, and it fires on Tennessee background
+chips as often as v3 (3.7%). So the hard-negative rule is not the main cause. Likely causes, not tested one by one:
+
+* the "maybe" rule drops the 10,244 chips with the most court-like look-alikes, so the model sees fewer of them;
+* 547 official and 335 pseudo boxes, many on faint or unmarked slabs, reward firing on slabs;
+* the official positives are too few (0.6% of the list) to teach courts OSM misses as such.
+
+v3b was trained after seeing v3's held-out results, so these sources served as validation for that one comparison.
+
+### Re-scoring the national candidates
+
+All **889,817** candidates (every v2 detection at conf ≥ 0.1 not near an OSM court) were re-scored on the node:
+
+* `rescore --fetch-only` cached a 192 m NAIP chip for each while v3 trained (56 min, 260 chips/s).
+* `rescore --score-col conf3` then ran v3, the verifier (on the candidate's box) and the context CNN (18.9 min,
+  785 chips/s; `out/v3/rescore_v3.parquet`).
+* `v3 merge-rescore` writes `out/national/v3/candidates_us.parquet`: `conf` is now v3's score, `conf_v2` keeps v2's,
+  plus `verify3` and `p_home`.
+* **The context CNN scored 675,620 candidates for the first time** (v2 scored only the 214,197 in its screen). Their
+  privacy classes were updated by `v3.reclassify`, which reproduces `privacy.classify_point` for a new `p_home`
+  (tested against it in `tests/test_v3.py`). Changes: 9,780 public → private_home, 2,472 private_home → public (a
+  house-lot near a point site the CNN calls public), 61,384 unknown → private_home.
+* v3 scores 149,281 candidates ≥ 0.5 (v2: 159,140).
+
+### Export operating point
+
+`v3 calibrate` sets a verifier threshold per state from its known courts. Known courts are v2 detections near an OSM
+court with conf ≥ 0.5. Nationally, 18.6% of them have `verify_scan` ≥ 0.98. Each state's threshold is the score that
+passes the same 18.6% of its own known courts, between a floor of 0.9 and 0.98. States with under 150 known courts
+keep 0.98. 36 states get a lower threshold, from 0.945 (NM, NE) through 0.963 (MO), 0.970 (TX) and 0.972 (OH, OK) to
+0.980.
+
+Rules compared with `v3 grid` (held-out evidence: candidates inside held-out covered parks that match an official
+court, and DC + Ramsey candidates matching a traced court). The candidates are never near an OSM court:
+
+| rule (all: public, context CNN scored) | candidates | CA share | TX / MO / OH | held-out park matches | DC + Ramsey matches |
+|---|---|---|---|---|---|
+| v2 export: v2 ≥ 0.5, verify ≥ 0.98 | 5,431 | 0.54 | 74 / 11 / 39 | 11 / 12 | 5 / 6 |
+| v3 ≥ 0.5, verify ≥ 0.98 | 5,646 | 0.54 | 81 / 13 / 43 | 11 / 12 | 5 / 6 |
+| **v3 ≥ 0.5, v2 ≥ 0.5, verify ≥ per-state threshold (exported)** | **5,924** | **0.49** | **157 / 50 / 76** | 13 / 14 | 5 / 6 |
+| v3 ≥ 0.6, v2 ≥ 0.5, verify ≥ 0.95 | 13,487 | 0.44 | 333 / 76 / 195 | 20 / 21 | 15 / 17 |
+| v3 ≥ 0.6, v2 ≥ 0.6, verify ≥ 0.9 | 20,847 | 0.41 | 732 / 186 / 372 | 24 / 25 | 20 / 24 |
+
+The held-out counts are too small to choose between rules, so the choice rests on blind reviews (model-assistant
+labels, not gold; C = court markings or hoops visible, N = clearly something else, U = unmarked slab or unclear):
+
+| sample | C | N | U | precision C / (C + N) (Wilson 95% CI) |
+|---|---|---|---|---|
+| 40 of the 655 per-state-threshold candidates v2 did not export (`review/inc_states`) | 23 | 1 | 16 | 0.96 (0.80–0.99) |
+| 40 of the 7,898 the verify-0.95 rule adds on top (`review/inc_verify95`) | 29 | 4 | 7 | 0.88 (0.73–0.95) |
+| **100 random exported candidates** (`review/exported_sample`) | **73** | **4** | **23** | **0.95 (0.87–0.98)**; 0.73 (0.64–0.81) with unsure counted as not |
+
+* **Exported:** public, v3 ≥ 0.5 and v2 ≥ 0.5, `verify_scan` ≥ the state's threshold, context CNN scored: **5,924
+  candidates** (`out/national/v3/app_ready/`, 49 files plus `index.json` and `exported_candidates.parquet`; 78,893 OSM
+  courts as before). The files validate with `export_app.validate` and have the v2 schema (detected features add `site`).
+* The four N in the exported sample are two Oklahoma school sand-volleyball courts, a school parking area and a painted
+  plaza circle. All four were already in v2's export (verifier 0.987–0.999). The 13 sampled candidates v2 did not
+  export are 9 C and 4 U.
+* The verify-0.95 rule would show 2.3 times as many courts at an estimated 0.91 overall. Its own increment measured
+  0.88, with tennis courts, sand volleyball and a splash pad among the misses. That is too close to the 0.9 aim to
+  ship without a gold check.
+* Unsure (unmarked school blacktops and slabs, often with hoop-pole dots) is 23% here, against 41% in v2's exported
+  sample. Half of this sample is California school blacktops with painted courts. Labels by the same reviewer on
+  different days are not strictly comparable, so read the two as similar.
+* **What v3 adds to this export is small.** Without the v3 ≥ 0.5 condition the same rule exports 6,116; v3's agreement
+  removes 192 (3%). The gain over v2's export comes from the per-state thresholds, and from the context CNN now
+  having scored every candidate. Neither needs v3.
+
+**Per state, detected candidates exported (v2 → v3):** CA 2,954 → 2,899 · FL 394 → 381 · NV 304 → 302 · AZ 263 → 249 ·
+TX 74 → 157 · NJ 110 → 106 · NY 112 → 106 · NC 80 → 101 · PA 100 → 96 · MI 45 → 79 · OK 51 → 78 · OH 39 → 76 ·
+SC 37 → 70 · IL 66 → 65 · MA 65 → 63 · TN 33 → 62 · GA 64 → 61 · LA 52 → 61 · MD 41 → 61 · CO 47 → 57 · UT 33 → 56 ·
+IN 24 → 51 · MN 43 → 50 · MO 11 → 50 · AR 35 → 48 · VA 49 → 47 · AL 22 → 40 · NM 11 → 40 · WI 21 → 38 · KY 31 → 36 ·
+WA 17 → 36 · ID 14 → 35 · KS 18 → 30 · IA 21 → 29 · WV 23 → 29 · RI 24 → 23 · MS 18 → 22 · CT 18 → 18 · OR 8 → 17 ·
+NE 1 → 15 · ME 13 → 13 · MT 5 → 13 · ND 4 → 12 · NH 10 → 10 · VT 10 → 10 · WY 4 → 9 · SD 7 → 8 · DE 3 → 7 ·
+DC 2 → 2 · **total 5,431 → 5,924**. CA's share falls from 54% to 49%.
+
+### Outputs (git-ignored)
+
+* `data/v3/`: `split.json`, `holdout_zones.geojson`, `heldout_area.geojson`, `heldout_items.txt`,
+  `heldout_scanned_area.geojson`, `snapped.parquet`, `snap_decisions.parquet`, `snap_summary.json`, `snap_exclude.txt`,
+  `official_dropped_r2.txt`, `snapped_r1.parquet` / `snap_decisions_r1.parquet` (the first pass the dataset was built from), `extra_courts.parquet` (v3), `extra_courts_b.parquet` (v3b), `rescore_input.parquet`.
+* `datasets/us3/`: `v3a_stats.json` / `v3a_manifest.csv.gz` (v3), `v3b_stats.json` / `v3b_manifest.csv.gz`, `previews/`.
+  The chips stayed on the node.
+* `weights/best_v3.pt`, `best_v3b.pt` (+ `.json`), `runs/us3-y11s-416/`, `runs/us3b-y11s-416/`.
+* `out/v3/`: `heldout/<model>/detections.parquet`, `heldout_eval.json`, `eval_tn_<model>/`, `eval_us_<model>/`,
+  `tn_eval.json`, `rescore_v3.parquet`, `snap_review/`, `review_heldout_unmatched/`, `node_logs/`.
+* `out/national/v3/`: `candidates_us.parquet` (all 889,817 with `conf` = v3, `conf_v2`, `verify3`, updated classes,
+  `export`), `merge_rescore.json`, `verify_thresholds.json`, `grid.json`, `selection.json`, `review/` (three samples with
+  `labels.json`), `app_ready/`.
+* `data/osm_us_20261015/`: the fresh OSM layers.
+
+### Cost
+
+One `gpu_1x_a100_sxm4` (A100 80 GB, us-east-1, $1.99/h) as `hh-v3a`, launched 17:40 UTC with `--max-hours 6`.
+The watchdog was installed and self-tested (timer, cron fallback, own id resolved by IP) before any work. Terminated
+by hand at 21:02 UTC: **3.38 h, about $6.72** of the $30 budget (`cloud/last_run.json`, run `v3-2026-10-16`).
+`GET /instances` then returned 0. Time on the node: setup and the throttled Geofabrik download 50 min (prefetch and
+the v1/v2 held-out scans ran meanwhile), OSM 6 min, dataset 10 min, training 43 min (plus the 14 min stopped run),
+held-out scans about 4 min per model, TN evaluations 3 min, rescore 19 min, v3b about 50 min.
+
+### Recommendation
+
+* **Keep v2 as the detector.** v3 finds more courts OSM lacks at the same threshold (0.55 against 0.48 at conf 0.5 on
+  the 203 held-out ones), but only by firing more: at equal precision on the all-owner DC and Ramsey layers it finds
+  fewer than v2, and the ablation does not change that. On the Tennessee chips it is about even.
+* **Use the new export** (`out/national/v3/app_ready/`). It shows 5,924 candidates at 0.95 measured precision
+  (C / (C + N)) and is more even across states: TX 74 → 157, MO 11 → 50, OH 39 → 76, CA's share 54% → 49%. Its gain
+  comes from the per-state verifier thresholds and the full context-CNN pass, not from v3.
+* **Do not run the ~$155 national rescan with v3.** The candidate pool already holds every v2 detection ≥ 0.1. v3's
+  extra held-out recall comes mostly at scores where its precision is below v2's. A rescan would add look-alikes, not
+  courts the export can show.
+* **What would move the detector:** many more labels of the courts OSM misses (Eli's gold tiles, app confirmations,
+  more all-owner planimetric sources), and look-alike negatives (tennis, sand volleyball, roofs, plazas) taken from
+  reviewed candidates instead of from the verifier.
+
+### Commands as run
+
+```bash
+# local (CPU)
+python -m hoop_pipeline.v3 split                 # data/v3/split.json, holdout_zones.geojson, heldout_area.geojson
+python -m hoop_pipeline.v3 snap                  # data/v3/snapped.parquet + out/v3/snap_review/ (looked at by eye)
+python -m hoop_pipeline.v3 layers                # data/v3/extra_courts.parquet (official, pseudo, maybe, hard)
+python -m hoop_pipeline.v3 heldout-items         # data/v3/heldout_items.txt (141 NAIP files)
+python -m hoop_pipeline.v3 rescore-input         # data/v3/rescore_input.parquet
+python cloud/lastrun.py new-run v3-2026-10-16 --usd 30 --hours 15
+bash cloud/launch.sh v3a gpu_1x_a100_sxm4,gpu_1x_a10 --max-hours 6    # watchdog installed + self-test passed
+HH_NODE=v3a bash cloud/sync_code.sh
+HH_NODE=v3a bash cloud/start_stage.sh setup; HH_NODE=v3a bash cloud/start_stage.sh pbf
+# inputs as one 304 MB tar (weights, data/v3, removed/excluded lists, the 2026-10-06 courts as data/osm_us_1006/,
+# CONUS plan, NAIP catalog, truth parquets): 10 s
+HH_NODE=v3a bash cloud/start_stage.sh job prefetch bash cloud/v3_node.sh prefetch
+HH_NODE=v3a bash cloud/start_stage.sh job heldout_v1v2 bash -c "bash cloud/v3_node.sh heldout v1 && bash cloud/v3_node.sh heldout v2"
+HH_NODE=v3a bash cloud/start_stage.sh job v3all bash cloud/v3_node.sh all    # osm, dataset, train, heldout v3, tn_eval, rescore
+HH_NODE=v3a bash cloud/start_stage.sh job v3b bash cloud/v3_node_next.sh v3b # ablation (this file, pushed under a new name)
+# local again
+python -m hoop_pipeline.v3 heldout-eval --thresholds 0.1 0.2 0.3 0.4 0.5 0.55 0.6 0.65 0.7 0.75 --models v1 v2 v3 v3b
+python -m hoop_pipeline.v3 tn-eval --models v1 v2 v3 v3b
+python -m hoop_pipeline.v3 merge-rescore
+python -m hoop_pipeline.v3 calibrate
+python -m hoop_pipeline.v3 grid --rules "score=conf_v2,conf=0.5,verify=0.98" "conf=0.5,verify=0.98,v2=0.5,states=out/national/v3/verify_thresholds.json" ...
+python -m hoop_pipeline.v3 select --min-conf 0.5 --min-verify 0.98 --min-conf-v2 0.5 --thresholds out/national/v3/verify_thresholds.json
+python -m hoop_pipeline.national app-ready --out out/national/v3 --osm-dir data/national/osm_geojson \
+    --osm-privacy-dir out/national/osm_privacy --min-conf 0 --min-verify -1 --verify-col verify_scan --flag-col export --require-phome
+python -m hoop_pipeline.v3 review --name exported_sample --where export --n 100 --seed 7
+bash cloud/terminate.sh v3a                      # GET /instances -> 0
+```
+
+Gotchas from this run:
+
+* **Geofabrik throttled the node** to 0.5–2.5 MB/s after the first 3 GB of the 12.2 GB extract. This PC still got
+  ~6.7 MB/s. The bytes from 5.6 GB on were fetched here in two ranges, uploaded, spliced onto the node's partial file
+  and checked against Geofabrik's md5 (match), which saved about 45 minutes.
+* `train.py` passes `lr0`, but Ultralytics' default `optimizer=auto` ignores it (it picks SGD 0.01 for long runs).
+  v3 sets `optimizer=SGD` explicitly.
+* `cloud/v3_node.sh` is one function called on its last line, like `run_remote.sh`, so a new copy can be pushed
+  while a part runs. The first version was not, and the v3b part was pushed under another name to stay safe.
+
+### Caveats
+
+* **Labels are model-assistant labels, not gold.** Every precision number from review was labelled blind, by
+  the same reviewer as v2's sheets. The held-out truth numbers do not depend on it.
+* **The held-out sources were looked at after v3.** The v3b ablation was trained after seeing v3's held-out
+  results, so comparing v3 and v3b on them makes those sources part validation. They still were never labels.
+* **DC + Ramsey precision is a lower bound:** courts built after the planimetric capture, or missed by it, count as
+  errors. The blind look found 3 courts among 40 unmatched v3 detections, so the bias is small.
+* **The official labels are few.** 547 boxes in 1,368 list lines (0.6% of the list), against 164k OSM boxes. The
+  pseudo-labels only touch 335 boxes in existing chips.
+* **The rescore keeps the candidate pool v2 found** (conf ≥ 0.1). Courts v2 missed entirely are not candidates.
+* **Per-state thresholds rest on known courts.** That assumes a state's flight shifts the verifier's scores for
+  candidates the way it does for known courts. The 40-crop review of the added candidates supports it (0.96), but it
+  is not a per-state measurement.
+* **Privacy:** the 2,472 private_home → public changes follow the existing rule (a house-lot near a point site needs
+  `p_home` ≥ 0.25 once the CNN has scored it). None appeared in the reviewed samples as a home lot, but that rule is
+  the known leak pattern (README "Limits").
+* **Licenses:** official truth records were used only as internal training labels and test references. The app files
+  contain detections and OSM courts, never truth records.
+
 ## Limits (read before trusting a candidate)
 
 * **Painted courts and blacktops are detectable at 0.6 m; single hoops mostly
@@ -2316,7 +2685,8 @@ Costs assume A100 nodes at $1.99/h, each with a watchdog:
 | step | what it gives | nodes × time | cost |
 |---|---|---|---|
 | v2 Tennessee fleet scan (the lost run), then `post_scan_tn.sh` | v2's own every-pixel candidates and recall, the benchmark with TensorRT | 3 × ~25 min incl. setup, plus `main` ~40 min (privacy, review crops) | ~$4 |
-| rebuild `data/osm_us` (Geofabrik `pbf` + `osm` stages) | the context layer for new datasets or other states' site layers | 1 × ~40 min | ~$1.5 |
+| ~~rebuild `data/osm_us` (Geofabrik `pbf` + `osm` stages)~~ | done 2026-10-16 on the v3 node; the extract of 2026-10-15 is in `data/osm_us_20261015/` (context layer 1.0 GB). `data/osm_us/` stays the 2026-10-06 extract the truth set and national candidates were matched against | | |
+| ~~v3 detector~~ | done 2026-10-16, not adopted (see [v3](#v3-courts-osm-misses-2026-10-16)) | 1 × 3.4 h | $6.72 |
 | rebuild `data/crops` (`cropcls verifier-data` / `privacy context-data`) | retraining the verifier or the context CNN | 1 × ~20 min, after `data/osm_us` | ~$0.7 |
 | ~~Overture buildings for CONUS~~ | done 2026-10-16 (30 min, see [National run](#national-run-2026-10-15)) | | |
 | ~~national scan (runbook)~~ | done 2026-10-15/16: 8 nodes, 5.6–15.4 h each | | ~$154 + $2.83 post-processing |
@@ -2385,6 +2755,8 @@ pipeline/
     national.py      national post-processing: site slices, OSM p_home, per-state privacy, summary, review, app-ready, truth-eval
     truth.py         official court truth set: refresh / build / osm-compare / evaluate / export-labels / chips
     wkb_curves.py    linearise curve geometries (PAD-US) for shapely
+    v3.py            v3 workflow: split / snap / layers / heldout-items / heldout-eval / tn-eval / merge-rescore /
+                     calibrate / grid / select / review / rescore-input
   truth_sources.json registry of official court sources (endpoint, filter, fields, license quote, coverage, precision)
   tools/label/
     index.html       keyboard-driven gold-set labelling page (data/ is git-ignored)
@@ -2394,6 +2766,7 @@ pipeline/
     setup_remote.sh run_remote.sh post_train_v2.sh post_scan_tn.sh requirements-cloud.txt             (instance)
     watchdog_install.sh watchdog_instance.py                                                          (instance, root)
     national.sh national_node.sh national_scan.sh national_post.sh pull_results.py                    (national run)
+    v3_node.sh                                                                                        (v3 run, instance)
     lastrun.py diag_reads.py bench_reads.py bench_infer.py bench_fastdet.py estimate_paved_fraction.py
     estimate_national.py bench_table.py compare_evals.py
     review_samples.py review_crops.py sample_review.py score_review.py disagree.py gold_review.py
@@ -2402,5 +2775,6 @@ pipeline/
   tests/
     test_watchdog.py both watchdogs against a fake Lambda API (python -m unittest discover -s tests)
     test_truth.py    truth filters, Esri geometry conversion, build + evaluate on synthetic data (offline)
+    test_v3.py       v3 privacy update vs classify_point; builder extra layers (merge, labels, maybe, hard)
   data/ datasets/ runs/ weights/ out/ .ultralytics/ tools/label/data/ remote_v2/   (git-ignored, regenerable)
 ```

@@ -272,7 +272,7 @@ def cmd_partition(args: argparse.Namespace) -> None:
         # order (shuffled within a state), so the fleet finishes states one after another and each state's
         # results can be pulled as soon as it is done.
         st_arr = np.asarray(sts, dtype=object)
-        st_tiles = Counter()
+        st_tiles: Counter[str] = Counter()
         for s_, t_, p_ in zip(sts, tiles.tolist(), pending.tolist()):
             if p_:
                 st_tiles[s_] += t_
