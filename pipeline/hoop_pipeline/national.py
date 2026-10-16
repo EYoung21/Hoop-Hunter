@@ -18,7 +18,9 @@ Commands
     review        blind stratified review sheets of public candidates (rescore chips) -> out/national/review/
     score         precision per stratum and at operating points from the reviewer's labels
     app-ready     out/national/app_ready/<ST>.geojson in the app schema (+ site): OSM courts that pass the privacy
-                  policy plus public candidates at the chosen operating point
+                  policy plus public candidates at the chosen operating point (+ exported_candidates.parquet)
+    truth-eval    official-court truth set vs the national detections: recall per source / overall / courts OSM
+                  lacks, the 2026-10-15 snapshot area, and conf x verifier grids of the in-park match share
 """
 
 from __future__ import annotations
@@ -133,8 +135,10 @@ FEATURE_KEYS = ("house_35m", "house_60m", "mid_100m", "nearest_bldg_m", "nearest
 
 
 def classify_state(st: str, detections: str, rescore: str | None, osm_phome: str | None, courts: str,
-                   sites_dir: str, buildings_dir: str, out_dir: str, padus_inset_m: float) -> dict[str, Any]:
-    """Privacy class of every candidate (not near a known OSM court) and every OSM feature of one state."""
+                   sites_dir: str, buildings_dir: str, out_dir: str, padus_inset_m: float,
+                   min_conf: float = 0.0) -> dict[str, Any]:
+    """Privacy class of every candidate (not near a known OSM court, conf >= min_conf) and every OSM feature of
+    one state."""
     from pyproj import Transformer
 
     from .privacy import ALBERS, Context, classify_point, point_features
@@ -142,7 +146,8 @@ def classify_state(st: str, detections: str, rescore: str | None, osm_phome: str
     t0 = time.monotonic()
     setup_logging(0)
     det = pq.read_table(detections, filters=[("state", "=", st)])
-    det = det.filter(pc.equal(det.column("near_known_osm"), ""))
+    det = det.filter(pc.and_(pc.equal(det.column("near_known_osm"), ""),
+                             pc.greater_equal(det.column("conf"), min_conf)))
     d = det.to_pydict()
     n = len(d["id"])
     p_home = np.full(n, np.nan)
@@ -219,7 +224,8 @@ def cmd_privacy(args: argparse.Namespace) -> None:
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         futs = {pool.submit(classify_state, st, str(args.detections), str(args.rescore) if args.rescore else None,
                             str(args.osm_phome) if args.osm_phome else None, str(args.courts), str(args.sites_dir),
-                            str(args.buildings_dir), str(args.out), args.padus_inset_m): st for st in sts}
+                            str(args.buildings_dir), str(args.out), args.padus_inset_m, args.min_conf): st
+                for st in sts}
         for f in as_completed(futs):
             try:
                 results.append(f.result())
@@ -235,16 +241,56 @@ def band_counts(conf: np.ndarray) -> dict[str, int]:
     return {f"{t:.1f}": int((conf >= t).sum()) for t in BANDS}
 
 
+def done_marker_stats(results: Path, out: Path) -> dict[str, Counter[str]]:
+    """Per-state items / tiles / raw detections from the scan's ``.done.json`` markers, plus a per-worker-host
+    throughput table (items, tiles, first and last finished file) written to ``<out>/scan_throughput.json``."""
+    scanned: dict[str, Counter[str]] = {}
+    hosts: dict[str, dict[str, Any]] = {}
+    for sdir in sorted(p for p in results.iterdir() if p.is_dir() and not p.name.startswith("_")):
+        c = scanned.setdefault(sdir.name, Counter())
+        for mk in sdir.glob("*.done.json"):
+            r = json.loads(mk.read_text(encoding="utf-8"))
+            c["items"] += 1
+            c["tiles"] += int(r.get("tiles") or 0)
+            c["raw_detections"] += int(r.get("raw_detections") or 0)
+            c["item_seconds"] += float(r.get("item_seconds") or 0.0)
+            host = str(r.get("worker", "?")).split(":")[0]
+            h = hosts.setdefault(host, {"items": 0, "tiles": 0, "first": None, "last": None})
+            h["items"] += 1
+            h["tiles"] += int(r.get("tiles") or 0)
+            fin = r.get("finished")
+            if fin:
+                h["first"] = fin if h["first"] is None or fin < h["first"] else h["first"]
+                h["last"] = fin if h["last"] is None or fin > h["last"] else h["last"]
+    for h in hosts.values():
+        if h["first"] and h["last"]:
+            span = (dt.datetime.fromisoformat(h["last"]) - dt.datetime.fromisoformat(h["first"])).total_seconds()
+            h["span_h"] = round(span / 3600, 2)
+            h["tiles_per_s_over_span"] = round(h["tiles"] / span, 1) if span > 0 else None
+    write_json(out / "scan_throughput.json", hosts)
+    return scanned
+
+
 def cmd_summarize(args: argparse.Namespace) -> None:
+    from pyproj import Transformer
+
     files = sorted((args.out / "privacy").glob("*.parquet"))
     t = pa.concat_tables([pq.read_table(p) for p in files], promote_options="default")
     item = pc.replace_substring_regex(t.column("item_id"), r"~[A-Z]{2}$", "")
+    # the box: Albers (EPSG:5070) metres as merged, plus its lon/lat bounds
+    ax0, ay0, ax1, ay1 = (t.column(c).to_numpy().astype(float) for c in ("ax0", "ay0", "ax1", "ay1"))
+    tr = Transformer.from_crs("EPSG:5070", "EPSG:4326", always_xy=True)
+    lo, la = tr.transform(np.r_[ax0, ax1, ax1, ax0], np.r_[ay0, ay0, ay1, ay1])
+    lo, la = np.asarray(lo).reshape(4, -1), np.asarray(la).reshape(4, -1)
     cand = pa.table({
         "id": t.column("id"), "state": t.column("state"), "lon": t.column("lon"), "lat": t.column("lat"),
         "conf": t.column("conf"), "verify_scan": t.column("verify"), "verify": t.column("verify2"),
         "conf2": t.column("conf2"), "p_home": t.column("p_home"), "privacy": t.column("privacy"),
         "site": t.column("site"), "privacy_reason": t.column("privacy_reason"), "box_w_m": t.column("box_w_m"),
         "box_h_m": t.column("box_h_m"), "edge": t.column("edge"), "naip_item": item, "naip_date": t.column("date"),
+        "box_ax0": t.column("ax0"), "box_ay0": t.column("ay0"), "box_ax1": t.column("ax1"), "box_ay1": t.column("ay1"),
+        "box_west": pa.array(lo.min(0)), "box_south": pa.array(la.min(0)), "box_east": pa.array(lo.max(0)),
+        "box_north": pa.array(la.max(0)),
         **{c: t.column(c) for c in t.column_names if c.startswith("f_")},
     })
     cand = cand.sort_by([("conf", "descending")])
@@ -255,13 +301,16 @@ def cmd_summarize(args: argparse.Namespace) -> None:
     rec = merge.get("known_court_recall", {}).get("by_state", {})
     plan = pq.read_table(args.plan / "plan.parquet", columns=["item_id", "state", "kept_tiles", "zone_km2"]).to_pydict()
     scanned: dict[str, Counter[str]] = {}
-    for p in sorted(args.packed.glob("*.items.parquet")):
+    packs = sorted(args.packed.glob("*.items.parquet")) if args.packed.exists() else []
+    for p in packs:
         it = pq.read_table(p, columns=["state", "tiles", "raw_detections", "item_seconds"]).to_pydict()
         for s_, tl, rd in zip(it["state"], it["tiles"], it["raw_detections"]):
             c = scanned.setdefault(s_, Counter())
             c["items"] += 1
             c["tiles"] += int(tl or 0)
             c["raw_detections"] += int(rd or 0)
+    if not packs:  # per-item results (the national run copied every item's file, not packs)
+        scanned = done_marker_stats(args.results, args.out)
     plan_st: dict[str, Counter[str]] = {}
     for s_, kt, zk in zip(plan["state"], plan["kept_tiles"], plan["zone_km2"]):
         c = plan_st.setdefault(s_, Counter())
@@ -316,12 +365,17 @@ def cmd_review(args: argparse.Namespace) -> None:
                       columns=["id", "state", "conf", "verify", "verify_scan", "conf2", "p_home", "privacy", "site",
                                "box_w_m", "box_h_m", "lon", "lat"])
     t = t.filter(pc.is_in(t.column("privacy"), value_set=pa.array(args.classes)))
-    t = t.filter(pc.is_valid(t.column("verify")))
+    t = t.filter(pc.is_valid(t.column(args.verify_col)))
+    if args.require_phome:
+        t = t.filter(pc.is_valid(t.column("p_home")))
+        t = t.filter(pc.invert(pc.is_nan(t.column("p_home"))))
+    if args.min_conf2 > -1:
+        t = t.filter(pc.greater_equal(pc.fill_null(t.column("conf2"), -1.0), args.min_conf2))
     d = t.to_pydict()
     rng = random.Random(args.seed)
     n = len(d["id"])
     conf = np.asarray(d["conf"], float)
-    ver = np.asarray(d["verify"], float)
+    ver = np.asarray(d[args.verify_col], float)
     have = np.array([(args.chips / f"{i}.jpg").exists() for i in d["id"]])
     strata: dict[str, dict[str, int]] = {}
     picked: list[dict[str, Any]] = []
@@ -362,6 +416,7 @@ def cmd_review(args: argparse.Namespace) -> None:
             sheet.paste(th, ((j % cols) * args.thumb_px, (j // cols) * args.thumb_px))
         sheet.save(out / f"sheet_{k // (cols * rws):02d}.jpg", quality=88)
     meta = {"classes": args.classes, "conf_bands": args.conf_bands, "verify_bands": args.verify_bands,
+            "verify_col": args.verify_col, "min_conf2": args.min_conf2, "require_phome": args.require_phome,
             "strata": strata, "crop_m": args.crop_px * gsd, "population": n, "items": picked,
             "note": "blind review sample (only a number on each crop); model-assistant labels, NOT gold"}
     write_json(out / "sample.json", meta)
@@ -405,7 +460,8 @@ def cmd_score(args: argparse.Namespace) -> None:
         it["code"], _, it["access"] = code.partition(":")
         items.append(it)
     strata = meta["strata"]
-    res: dict[str, Any] = {"note": "model-assistant labels (blind), NOT gold", "labeled": len(items),
+    vcol = args.verify_col or meta.get("verify_col", "verify")
+    res: dict[str, Any] = {"note": "model-assistant labels (blind), NOT gold", "labeled": len(items), "verify_col": vcol,
                            "codes": dict(Counter(it["code"] for it in items)),
                            "home_courts": sum(it["code"] == "C" and it["access"] == "H" for it in items),
                            "by_stratum": {}, "grid": []}
@@ -416,7 +472,7 @@ def cmd_score(args: argparse.Namespace) -> None:
     for c_min in args.conf_min:
         for v_min in args.verify_min:
             def keep(it: dict[str, Any], c_min: float = c_min, v_min: float = v_min) -> bool:
-                return it["conf"] >= c_min and it["verify"] >= v_min
+                return it["conf"] >= c_min and (it.get(vcol) if it.get(vcol) is not None else -1.0) >= v_min
             p, exp_c, pop = _estimate(items, strata, keep, False)
             p2, _, _ = _estimate(items, strata, keep, True)
             boots = sorted(v for v in (_estimate(items, strata, keep, False, rng)[0] for _ in range(1000)) if v == v)
@@ -440,18 +496,23 @@ def cmd_app_ready(args: argparse.Namespace) -> None:
     from .export_app import SITE_VALUES, _feature, osm_features, validate
 
     t = pq.read_table(args.out / "candidates_us.parquet",
-                      columns=["id", "state", "lon", "lat", "conf", "verify", "conf2", "privacy", "site"])
+                      columns=["id", "state", "lon", "lat", "conf", "verify", "verify_scan", "conf2", "p_home", "privacy",
+                               "site"])
     d = {k: t.column(k).to_numpy(zero_copy_only=False) for k in t.column_names}
-    ver = np.nan_to_num(d["verify"].astype(float), nan=-1.0)
+    ver = np.nan_to_num(d[args.verify_col].astype(float), nan=-1.0)
     c2 = np.nan_to_num(d["conf2"].astype(float), nan=-1.0)
     sel = (d["privacy"] == "public") & (d["conf"] >= args.min_conf) & (ver >= args.min_verify) & (c2 >= args.min_conf2)
+    if args.require_phome:  # only candidates whose home-lot check included the context CNN
+        sel &= np.isfinite(d["p_home"].astype(float))
     names = state_names(args.states_file)
     updated = args.updated
     dst = args.out / "app_ready"
     dst.mkdir(parents=True, exist_ok=True)
     index: dict[str, Any] = {"operating_point": {"privacy": "public", "min_conf": args.min_conf,
-                                                 "min_verify": args.min_verify, "min_conf2": args.min_conf2},
+                                                 "min_verify": args.min_verify, "verify_col": args.verify_col,
+                                                 "min_conf2": args.min_conf2, "require_phome": args.require_phome},
                              "updated": updated, "states": {}}
+    exported: list[np.ndarray] = []
     for code in sorted(names):
         label = state_slug(names[code])
         osm_file = args.osm_dir / f"courts_{code}.geojson"
@@ -464,6 +525,7 @@ def cmd_app_ready(args: argparse.Namespace) -> None:
             else:
                 osm = osm_features(osm_file, label, updated, None, priv, False)
         idx = np.flatnonzero(sel & (d["state"] == code))
+        exported.append(idx)
         det = []
         for i in idx[np.argsort(-d["conf"][idx])]:
             f = _feature(round(float(d["lon"][i]), 6), round(float(d["lat"][i]), 6), {
@@ -483,8 +545,125 @@ def cmd_app_ready(args: argparse.Namespace) -> None:
     tot = {"osm": sum(v["osm"] for v in index["states"].values()),
            "detected": sum(v["detected"] for v in index["states"].values())}
     index["totals"] = tot
+    ex = np.concatenate(exported) if exported else np.zeros(0, np.int64)
+    pq.write_table(t.take(pa.array(ex, type=pa.int64())), dst / "exported_candidates.parquet", compression="zstd")
     write_json(dst / "index.json", index)
     log.info("app_ready: %d states, %s -> %s", len(index["states"]), tot, dst)
+
+
+# =========================================================================== truth-eval
+def _park_share(res: dict[str, Any], key: str) -> tuple[int, int]:
+    """(detections inside covered parks, of them matching an official court) summed over sources."""
+    det = mat = 0
+    for e in res.get("sources", {}).values():
+        cp = (e.get("in_covered_parks") or {}).get(key)
+        if cp:
+            det += int(cp["detections"])
+            mat += int(cp["match_official"])
+    return det, mat
+
+
+def _run_summary(res: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    return {"all_court_level_recall": res.get("all_court_level_recall"), "rows": res.get("all_court_level_rows"),
+            "sources": {k: {kk: e.get(kk) for kk in ("recall", "recall_rows", "park_level_recall", "park_level_rows")}
+                        for k, e in res.get("sources", {}).items()},
+            "in_covered_parks": {k: dict(zip(("detections", "matched"), _park_share(res, k))) for k in keys}}
+
+
+def cmd_truth_eval(args: argparse.Namespace) -> None:
+    """Official-court truth set (truth.py) against the national detections: recall per source and overall, courts
+    OSM lacks, the 2026-10-15 snapshot area for comparison, and confidence x verifier grids of the share of
+    in-park detections that match an official court (a lower bound on in-park precision)."""
+    from . import truth
+
+    dst = args.dir
+    dst.mkdir(parents=True, exist_ok=True)
+    th = list(args.thresholds)
+    keys = [f"{x:.2f}" for x in th]
+
+    def ev(path: Path, states: list[str] | None = None, sources: list[str] | None = None, weak: bool = False,
+           area: Path | None = None, not_in_osm: bool = False, min_area: float = 0.0) -> dict[str, Any]:
+        return truth.evaluate(path, "conf", th, config.KNOWN_COURT_RADIUS_M, 15.0, 250.0, states, sources, weak,
+                              area, not_in_osm, min_area)
+
+    summary: dict[str, Any] = {"detections": str(args.detections), "thresholds": th, "runs": {}}
+    runs: dict[str, dict[str, Any]] = {
+        "official": {}, "minarea150": {"min_area": 150.0}, "notinosm": {"not_in_osm": True},
+        "notinosm_minarea150": {"not_in_osm": True, "min_area": 150.0},
+        "weak": {"weak": True, "sources": ["overture_places"]}}
+    for name, kw in runs.items():
+        res = ev(args.detections, **kw)
+        write_json(dst / f"eval_{name}.json", res)
+        summary["runs"][name] = _run_summary(res, keys)
+        log.info("truth %s: court-level recall %s (%s rows)", name, res.get("all_court_level_recall"),
+                 res.get("all_court_level_rows"))
+    snap = args.snapshot
+    if snap is not None and (snap / "scanned_area.geojson").exists() and (snap / "eval_national_minarea150.json").exists():
+        old = json.loads((snap / "eval_national_minarea150.json").read_text(encoding="utf-8"))
+        res = ev(args.detections, states=old["states"], area=snap / "scanned_area.geojson", min_area=150.0)
+        write_json(dst / "eval_snapshot_area_minarea150.json", res)
+        full = summary["runs"]["minarea150"]["sources"]
+        comp: dict[str, Any] = {}
+        for k, e in res.get("sources", {}).items():
+            o = old["sources"].get(k, {})
+            kind, rows = ("recall", "recall_rows") if "recall" in e else ("park_level_recall", "park_level_rows")
+            comp[k] = {"rows_snapshot": o.get(rows), "snapshot": o.get(kind), "rows_same_area": e.get(rows),
+                       "final_same_area": e.get(kind), "rows_full": full.get(k, {}).get(rows),
+                       "final_full": full.get(k, {}).get(kind)}
+        comp["ALL court-level"] = {"rows_snapshot": old.get("all_court_level_rows"),
+                                   "snapshot": old.get("all_court_level_recall"),
+                                   "rows_same_area": res.get("all_court_level_rows"),
+                                   "final_same_area": res.get("all_court_level_recall"),
+                                   "rows_full": summary["runs"]["minarea150"]["rows"],
+                                   "final_full": summary["runs"]["minarea150"]["all_court_level_recall"]}
+        summary["snapshot_comparison_minarea150"] = comp
+    # grid 1: every detection (incl. those near OSM courts) by in-scan verifier
+    cols = ["lon", "lat", "conf", "verify", "state"]
+    t = pq.read_table(args.detections, columns=cols)
+    grid = []
+    tmp = dst / ".grid_tmp.parquet"
+    for v in args.verify_grid:
+        pq.write_table(t.filter(pc.greater_equal(pc.fill_null(t.column("verify"), -1.0), v)), tmp)
+        res = ev(tmp, min_area=150.0)
+        for k in keys:
+            n_in, n_m = _park_share(res, k)
+            grid.append({"verify_min": v, "conf_min": float(k),
+                         "court_level_recall": (res.get("all_court_level_recall") or {}).get(k),
+                         "in_park_detections": n_in, "in_park_matched": n_m, "share": round(n_m / n_in, 3) if n_in else None})
+    summary["grid_detections_minarea150"] = grid
+    # grid 2: candidates (not near OSM) by verifier column and privacy class; recall on courts OSM lacks
+    if args.candidates is not None and args.candidates.exists():
+        c = pq.read_table(args.candidates, columns=["lon", "lat", "conf", "verify", "verify_scan", "state", "privacy"])
+        cgrid = []
+        for vcol in ("verify_scan", "verify"):
+            for v in args.verify_grid:
+                for cls in ("public", "any"):
+                    sub = c.filter(pc.greater_equal(pc.fill_null(c.column(vcol), -1.0), v))
+                    if cls != "any":
+                        sub = sub.filter(pc.equal(sub.column("privacy"), cls))
+                    if not sub.num_rows:
+                        continue
+                    pq.write_table(sub.select(["lon", "lat", "conf", "state"]), tmp)
+                    res = ev(tmp, not_in_osm=True)
+                    conf = sub.column("conf").to_numpy()
+                    for k in keys:
+                        n_in, n_m = _park_share(res, k)
+                        cgrid.append({"verify_col": vcol, "verify_min": v, "privacy": cls, "conf_min": float(k),
+                                      "candidates": int((conf >= float(k)).sum()),
+                                      "recall_not_in_osm": (res.get("all_court_level_recall") or {}).get(k),
+                                      "not_in_osm_rows": res.get("all_court_level_rows"),
+                                      "in_park_candidates": n_in, "in_park_matched": n_m,
+                                      "share": round(n_m / n_in, 3) if n_in else None})
+        summary["grid_candidates_not_in_osm"] = cgrid
+    tmp.unlink(missing_ok=True)
+    if args.exported is not None and args.exported.exists():
+        res = ev(args.exported, not_in_osm=True)
+        write_json(dst / "eval_exported_notinosm.json", res)
+        res2 = ev(args.exported)
+        write_json(dst / "eval_exported_official.json", res2)
+        summary["exported"] = {"notinosm": _run_summary(res, keys), "official": _run_summary(res2, keys)}
+    write_json(dst / "truth_summary.json", summary)
+    log.info("truth-eval -> %s", dst / "truth_summary.json")
 
 
 # =========================================================================== CLI
@@ -522,12 +701,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--sites-dir", type=Path, default=BY_STATE)
     p.add_argument("--buildings-dir", type=Path, default=SITES_DIR)
     p.add_argument("--padus-inset-m", type=float, default=20.0)
+    p.add_argument("--min-conf", type=float, default=0.1, help="classify candidates at or above this detector score")
     p.add_argument("--states", nargs="*")
     p.add_argument("--workers", type=int, default=16)
     common(p)
     p = sub.add_parser("summarize")
     p.add_argument("--plan", type=Path, default=config.DATA_DIR / "scan2" / "US")
     p.add_argument("--packed", type=Path, default=NAT_DATA / "packed")
+    p.add_argument("--results", type=Path, default=config.DATA_DIR / "scan2" / "US" / "results",
+                   help="per-item results (done markers), used when --packed holds no packs")
     common(p)
     p = sub.add_parser("review")
     p.add_argument("--chips", type=Path, default=NAT_DATA / "rescore_chips")
@@ -535,6 +717,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--classes", nargs="+", default=["public"])
     p.add_argument("--conf-bands", type=float, nargs="+", default=[0.4, 0.5, 0.6, 0.7, 1.01])
     p.add_argument("--verify-bands", type=float, nargs="+", default=[0.0, 0.9, 0.98, 1.001])
+    p.add_argument("--verify-col", default="verify", choices=["verify", "verify_scan"],
+                   help="verify = fresh-chip verifier (rescore), verify_scan = the in-scan verifier")
+    p.add_argument("--min-conf2", type=float, default=-1.0, help="pool: second-detector score at least this")
+    p.add_argument("--require-phome", action="store_true", help="pool: only candidates the context CNN scored")
     p.add_argument("--per-stratum", type=int, default=15)
     p.add_argument("--crop-px", type=int, default=200)
     p.add_argument("--thumb-px", type=int, default=300)
@@ -545,19 +731,31 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--labels", type=Path, required=True)
     p.add_argument("--conf-min", type=float, nargs="+", default=[0.4, 0.5, 0.6, 0.7])
     p.add_argument("--verify-min", type=float, nargs="+", default=[0.0, 0.5, 0.9, 0.95, 0.98, 0.99])
+    p.add_argument("--verify-col", default=None, help="default: the column the sample was stratified on")
     common(p)
     p = sub.add_parser("app-ready")
     p.add_argument("--osm-dir", type=Path, default=config.OSM_US_DIR)
     p.add_argument("--min-conf", type=float, required=True)
     p.add_argument("--min-verify", type=float, required=True)
     p.add_argument("--min-conf2", type=float, default=-1.0)
+    p.add_argument("--verify-col", default="verify", choices=["verify", "verify_scan"])
+    p.add_argument("--require-phome", action="store_true", help="only candidates the context CNN scored")
     p.add_argument("--updated", default=dt.date.today().isoformat())
+    common(p)
+    p = sub.add_parser("truth-eval")
+    p.add_argument("--detections", type=Path, default=OUT / "detections.parquet")
+    p.add_argument("--candidates", type=Path, default=OUT / "candidates_us.parquet")
+    p.add_argument("--exported", type=Path, default=OUT / "app_ready" / "exported_candidates.parquet")
+    p.add_argument("--snapshot", type=Path, default=config.DATA_DIR / "truth" / "eval_national_20261015")
+    p.add_argument("--thresholds", type=float, nargs="+", default=[0.1, 0.25, 0.4, 0.5, 0.6, 0.7])
+    p.add_argument("--verify-grid", type=float, nargs="+", default=[0.0, 0.5, 0.8, 0.9, 0.95, 0.98])
+    p.add_argument("--dir", type=Path, default=OUT / "truth")
     common(p)
     args = ap.parse_args(argv)
     setup_logging(args.verbose)
     {"split-sites": cmd_split_sites, "osm-geojson": cmd_osm_geojson, "osm-phome": cmd_osm_phome,
      "privacy": cmd_privacy, "summarize": cmd_summarize, "review": cmd_review, "score": cmd_score,
-     "app-ready": cmd_app_ready}[args.cmd](args)
+     "app-ready": cmd_app_ready, "truth-eval": cmd_truth_eval}[args.cmd](args)
 
 
 if __name__ == "__main__":

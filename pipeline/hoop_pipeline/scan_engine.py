@@ -888,7 +888,9 @@ def cmd_merge(args: argparse.Namespace) -> None:
             done_ids |= set(pq.read_table(p, columns=["item_id"]).column("item_id").to_pylist())
         done = [i in done_ids for i in plan_ids]
     else:
-        files = sorted(p for p in results.glob("*/*.parquet") if not p.name.startswith("."))
+        # only finished items: a failed item still writes its (partial) parquet, but never a done marker
+        files = sorted(p for p in results.glob("*/*.parquet") if not p.name.startswith(".")
+                       and (p.parent / (p.name[: -len(".parquet")] + ".done.json")).exists())
         done = [done_marker(results, s, i).exists() for s, i in zip(plan_states, plan_ids)]
     log.info("%d result files; %d of %d planned items done", len(files), sum(done), len(plan_ids))
     tables = [pq.read_table(p) for p in files]

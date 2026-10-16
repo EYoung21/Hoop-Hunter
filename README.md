@@ -16,7 +16,13 @@ Find every basketball court, including the ones that aren't on any map. Hoop Hun
   - 553 NYC Parks courts
   - 131 new satellite finds in Tennessee, each one at a park, school, church, rec center or college and checked by eye
 - **Detector:** trained on every mapped court in the lower 48 (about 94,000 usable labels from 101,098 OpenStreetMap courts) at 0.6 m per pixel. On Tennessee, which was held out of training, it scores mAP50 0.77.
-- **Scanner:** scanned every pixel of Tennessee (6.49 million tiles) in 11 minutes on 3 rented GPUs. A nationwide scan is estimated at about $75 and 4.7 hours on 8 GPUs.
+- **Nationwide scan (Oct 15–16, 2026):**
+  - Scanned every NAIP pixel of the lower 48: 219,198 photo files on 8 rented GPUs, about $157.
+  - Found 889,817 possible courts that aren't in OpenStreetMap, 159,140 of them at confidence 0.5 or higher.
+  - After the privacy filter and the second-check model: 5,431 high-precision new public courts, plus 78,893 OpenStreetMap courts that pass the privacy policy. They're exported per state in `pipeline/out/national/app_ready/` (local only) for loading into a database.
+- **Accuracy against official city court lists:**
+  - Finds 87% of official courts of 150 m² or more at a low confidence setting, and 77% at 0.5.
+  - It's weaker on courts OpenStreetMap lacks: 47% at 0.5.
 - **Safety:** every rented GPU machine shuts itself down at a deadline or after 30 idle minutes. See the watchdog section in [pipeline/README.md](pipeline/README.md).
 - **Next:**
   - the nationwide scan

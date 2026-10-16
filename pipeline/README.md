@@ -412,6 +412,9 @@ the instance can terminate itself (see [Safety shutoff](#safety-shutoff-watchdog
 | `bench_fastdet.py`, `estimate_national.py` | instance / local | FastDetector GPU ceiling (PyTorch / TensorRT); national time and cost from the CONUS plan and benchmark workers |
 | `review_crops.py`, `sample_review.py`, `score_review.py`, `disagree.py`, `gold_review.py`, `filter_extra_negatives.py` | instance / local | crops for visual review, the stratified v2 review sample, scoring model-assistant labels, v1-vs-v2 disagreements, a blind v1-vs-v2 review of every box on the gold tiles, TN hard negatives away from held-out chips |
 | `compare_evals.py`, `bench_table.py` | local | README tables from `evaluate` outputs and from a scan's `merge_stats.json` |
+| `national.sh up\|status\|pull\|logs`, `national_node.sh`, `national_scan.sh` | local / instance | national scan fleet: push plan + manifest + weights, build the TensorRT engine, run up to 4 `scan_engine run` passes per node |
+| `pull_results.py` | local (scheduled task) | every 10 min copies new per-item results from live `hh-s*` nodes and releases a node's watchdog hold once its manifest is done and copied |
+| `national_post.sh rescan\|prep\|merge\|phome\|rescore\|privacy\|review\|package` | instance | national post-processing, one part per `start_stage.sh job` (see [National run](#national-run-2026-10-15)) |
 
 A full session:
 
@@ -1111,7 +1114,10 @@ development stratum:
 `cloud/scan_fleet.sh` runs the fleet: `launch` / `push` / `start` / `status` / `collect` /
 `terminate`.
 
-### National scan runbook (not run yet)
+### National scan runbook
+
+This was the plan before the run. What actually ran, and how long it took, is in
+[National run](#national-run-2026-10-15).
 
 1. **Data, once.**
    * `osm` stage (Geofabrik extract).
@@ -1863,6 +1869,404 @@ match, not to measure generalisation.
   * LA County vs Santa Ana (no overlap)
 * **Precision classes** were spot-checked on a few NAIP chips per source, not exhaustively.
 
+## National run (2026-10-15)
+
+The whole contiguous US (48 states + DC) was scanned with v2 at every NAIP pixel. The results were then
+merged, privacy-classified, re-scored, checked against the truth set and exported per state. Outputs are
+git-ignored under `out/national/` (and `data/national/`, `data/sites/`).
+
+### Scan: what ran
+
+* **Plan** (`data/scan2/US`): 219,198 NAIP files (one COG per item), 463.9 M planned 320 px tiles, 7.80 M km².
+  `partition --nodes 8 --by-state` gave each node about 27,400 files and 58.0 M tiles.
+* **Detector**: `best_v2.pt` at imgsz 416, conf ≥ 0.1, TensorRT FP16. The in-stream verifier (`verifier_v2.pt`)
+  scored every box ≥ 0.1 (`--verify-min 0.1`), so every detection carries `verify`.
+* **Fleet**: 8 × `gpu_1x_a100_sxm4` in us-east-1 (s1–s8 = manifests node0–node7), launched 18:32–18:39 UTC
+  with `--max-hours 8`.
+  * Each node ran `cloud/national_node.sh`: setup, TensorRT engine, then up to 4 `scan_engine run` passes.
+  * `cloud/pull_results.py` (Windows scheduled task, every 10 min) copied every finished file to this PC.
+* **Imagery read**: about 138 TB came in on the node interfaces, 0.30 MB per tile. The Tennessee benchmark
+  measured 0.17 MB per tile.
+
+| node | first pass: tiles/s | MB/s | GPU util | read errors per pass | last finished file (UTC) | terminated (UTC, ±5 min) | hours | cost |
+|---|---|---|---|---|---|---|---|---|
+| s1 | 1,571 | 475 | 42% | 1,031 / 387 / 231 / **145** | 10-16 09:22 | 09:58 | 15.4 | $30.70 |
+| s2 | 1,787 | 452 | 47% | 561 / 0 | 04:25 | 04:58 | 10.4 | $20.75 |
+| s3 | 1,786 | 458 | 47% | 566 / 0 | 04:26 | 04:58 | 10.4 | $20.75 |
+| s4 | 1,857 | 469 | 48% | 581 / 0 | 04:11 | 04:38 | 10.1 | $20.08 |
+| s5 | 2,875 | 854 | 56% | 108 / 0 | 00:40 | 01:28 | 6.8 | $13.58 |
+| s6 | 2,214 | 590 | 51% | 290 / 0 | 02:31 | 03:18 | 8.7 | $17.23 |
+| s7 | 2,224 | 585 | 51% | 325 / 0 | 02:32 | 03:18 | 8.7 | $17.23 |
+| s8 | 2,945 | 866 | 57% | 191 / 0 | 00:37 | 01:08 | 6.5 | $12.91 |
+| post (this step) | 1,519 (rescan) | 512 | 53% | 0 | 10-16 15:41 | 16:12 | 1.4 | $2.83 |
+
+**Throughput.**
+* The 7 healthy nodes finished their manifests in 5.6–9.5 h (first file 18:53 UTC, last 04:26 UTC). That is
+  about 13,500 tiles/s aggregate, or 1,690–2,860 tiles/s per node over each node's span.
+* s1 finished its first pass at 04:52 UTC with 1,031 errors and spent 4.5 more hours on retries.
+* The plan had estimated 3,600 tiles/s per node and 4.7 h. Reads were the limit: 450–870 MB/s per node, with GPU
+  utilisation of 42–57%.
+* Every node had read errors on its first pass (108–1,031 RasterioIOError "Read failed"), and each was retried.
+  s1's network path stayed bad: its later passes ran at 96–210 tiles/s, and 145 files still failed after pass 4.
+
+**Cost.**
+* Scan fleet: **$154.19** (77.5 node-hours, including the $0.96 watchdog test node). That figure is a log
+  estimate, because the nodes terminated themselves: each `terminated_at` in `cloud/last_run.json` is the last
+  sighting in `cloud/logs/watchdog.log` + 5 min. The owner's account figure was about $157.
+* Post-processing (this step): **$2.83** (1.42 h on one A100).
+* Total about **$157** by the log estimate, about $160 with the account figure.
+
+**Watchdog behaviour observed.**
+* **s2–s8.** They self-terminated through the 30-min idle rule, 22–53 min after their last finished file.
+  `pull_results.py` had already logged "scan finished and fully copied" for each. Nothing was lost: every node's
+  done markers are on this PC.
+  * **s5 and s8** finished before their 02:32 UTC launch deadline. The puller's hold kept them alive until it
+    released the hold (01:00 and 00:40 UTC), and they ended about 30 min later.
+  * **s2–s4, s6 and s7** finished after 02:32. A hold is capped at the launch deadline, so theirs had already
+    lapsed, and they ended about 30 min after their last pipeline activity (the final pass, then pack).
+  * After 02:32, only the 10-min puller stood between a finished node and its deletion. Uncopied results would
+    have been safe for only about 30 minutes.
+* **s1.**
+  * It stopped at 27,255 / 27,400 files. Its 4th pass ended at 09:22:36 UTC with the 145 failures, and
+    `national_scan.sh` exited (`NODE_SCAN_INCOMPLETE`).
+  * The node was still listed at 09:53 and gone by 10:03, so it ended **31–41 min after its last finished
+    file**.
+  * That matches the 30-min idle rule. The scan process had exited, and the puller's hold had expired at the
+    node's launch deadline (02:32), because holds are capped at it.
+  * It does not match the 60-min stall rule, which would have fired at about 10:23 or later. The local
+    `watchdog.py` had moved its own deadline out to 10:29 from the puller's progress record.
+  * The on-instance log was lost with the node, so which rule fired is inferred from these times, not read
+    from the log.
+* **The post node.**
+  * It was launched with `--max-hours 4` and no `progress_glob`, so its deadline was a hard 18:46 UTC.
+  * The watchdog was installed and its self-test passed before any work: timer active, cron fallback, and
+    `GET /instances` resolved its own id.
+  * Holds of 45–60 min covered the uploads. It was terminated by hand at 16:12, and `GET /instances` then
+    returned 0.
+
+### Missing files and rescan
+
+* Comparing the 8 manifests with the done markers found 219,053 of 219,198 files done.
+* The **145 missing were all node0 (s1)**: AZ 55, CO 32, OK 21, AR 15, KS 13, IA 5, MN 3, IL 1.
+  * Each had a partial parquet but no done marker. A failed item writes its parquet and skips the marker.
+  * Nodes 1–7 were complete.
+* On the post node, `national_post.sh rescan` ran all 145 in **one pass with 0 errors**: 340,423 tiles in
+  224 s, PyTorch FP16, 300 detections, the same model and thresholds as the scan. So the failures belonged to
+  s1's link, not to the files.
+* The new files are copied back, so this PC now has all **219,198 / 219,198** done markers.
+* `scan_engine merge` now reads only files that have a done marker.
+
+### Merge, dedupe, known courts
+
+`scan_engine merge --plan data/scan2/US --out out/national` (4 min on the node):
+
+* **Raw detections.** 986,765 at conf ≥ 0.1. The cross-file merge (boxes from different files centred within
+  20 m; IoU / containment within a file) leaves **983,856**.
+* **Near known courts.** **94,039** are within 40 m of an OSM basketball feature (or their box touches one),
+  marked `near_known_osm`. That leaves **889,817 candidates**:
+
+  | conf ≥ | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 | 0.8 |
+  |---|---|---|---|---|---|---|---|---|
+  | candidates | 889,817 | 481,655 | 320,008 | 226,735 | 159,140 | 107,235 | 60,699 | 9,937 |
+
+* **Recall on OSM courts.** Over the 93,838 labelable OSM courts inside the scan: 0.88 / 0.86 / 0.83 / 0.80 /
+  0.74 / 0.66 / 0.52 at 0.1 / 0.2 / 0.3 / 0.4 / 0.5 / 0.6 / 0.7.
+  * Outside Tennessee these courts were training positives, so this is optimistic.
+  * By state at 0.5 it ranges from 0.54 (ND) to 0.89 (DE).
+
+### Privacy
+
+* **New national inputs, built on the post node.**
+  * Overture buildings 2026-09-23.1 for all 49 states: `buildings_<ST>.parquet`, 6.6 GB, 30 min with 8
+    workers. They are now also in `data/sites/`; this replaced the old `buildings_TN.parquet`, which came from
+    the same release.
+  * Per-state slices of `sites_us` / `residential_us` (`national split-sites`, 93 s).
+  * Context-CNN `p_home` for all 101,098 OSM basketball features (`national osm-phome`, 270 s, about 375 crops/s).
+* **Screen for the context CNN.** Candidates with conf ≥ 0.3 **and** in-scan verifier ≥ 0.5: **214,197**.
+  * `rescore` fetched a fresh 192 m NAIP chip for each (17.2 min, about 208 chips/s) and recorded three scores:
+    v2 again (`conf2`), the verifier on the centred chip (`verify`) and `p_home`.
+  * This screen contains every export candidate and every stratum of the review below. Candidates outside it
+    are classed by the rules alone.
+* **Classification.** `national privacy --min-conf 0.1` classed every one of the 889,817 candidates, plus every
+  OSM feature, in 1.4 min with 16 processes. Candidates by class:
+
+  | conf ≥ | public | residents_only | private_home | unknown | restricted | all |
+  |---|---|---|---|---|---|---|
+  | 0.1 | 150,408 | 7,450 | 453,613 | 268,910 | 9,436 | 889,817 |
+  | 0.3 | 85,265 | 3,434 | 153,502 | 72,590 | 5,217 | 320,008 |
+  | 0.5 | 57,401 | 2,001 | 66,784 | 29,336 | 3,618 | 159,140 |
+  | 0.7 | 30,625 | 843 | 18,921 | 8,301 | 2,009 | 60,699 |
+
+  * **What the context CNN changed.** It produced 21,989 of the private_home calls inside the screen:
+    * 16,443 unknown → private_home
+    * 4,228 near a point site
+    * 1,318 vetoes inside a public polygon
+  * **Screened public candidates by site.** School 46,058, park 13,514, church 4,698, rec 1,556, college 990,
+    community 383.
+  * **OSM courts.** 101,098 features: 76,729 public, 4,050 unknown, 2,972 residents_only, 14,859 private_home,
+    2,488 restricted.
+    * The export keeps **78,893**. It drops private_home, restricted and residents_only courts, and every court
+      tagged `access=private|no`.
+    * As in Tennessee, non-outdoor basketball features (sports centres) are kept.
+
+### Verifier: node-side scores confirmed
+
+On the 214,197 rescored candidates, the in-scan verifier (`verify_scan`) and the fresh-chip verifier (`verify`)
+agree closely:
+* Pearson 0.86, Spearman 0.88.
+* The difference has a median of 0.023 and a p90 of 0.116.
+* Of the 50,144 candidates with conf ≥ 0.5 and `verify_scan` ≥ 0.9, 93.6% also score ≥ 0.9 on the fresh chip
+  and 100% score ≥ 0.5. The second v2 pass (`conf2`) is ≥ 0.5 for 90% of them.
+
+The fresh chip scores slightly higher: 70,823 candidates reach ≥ 0.9 against 61,765 in-scan. So the export uses
+the in-scan score, which every detection has.
+
+The verifier separates known courts from new candidates. At conf ≥ 0.5, it scores 67% of the detections on OSM
+courts ≥ 0.9, against 32% of the new candidates.
+
+### Recall versus the truth set
+
+`national truth-eval` writes `out/national/truth/`. It covers all 983,856 detections, including those near OSM
+courts. A court-level record matches a detection within 40 m of its point or 15 m of its polygon.
+
+| truth subset | records | 0.10 | 0.25 | 0.40 | 0.50 | 0.60 | 0.70 |
+|---|---|---|---|---|---|---|---|
+| all official court-level | 4,232 | 0.77 | 0.73 | 0.70 | 0.66 | 0.60 | 0.50 |
+| court-level, ≥ 150 m² | 3,334 | **0.87** | 0.84 | 0.81 | **0.77** | 0.71 | 0.59 |
+| courts OSM lacks (never training positives) | 1,006 | 0.43 | 0.37 | 0.32 | 0.27 | 0.24 | 0.17 |
+| courts OSM lacks, ≥ 150 m² | 516 | **0.63** | 0.57 | 0.52 | **0.47** | 0.42 | 0.32 |
+| Overture `basketball_court` places (weak, mostly gyms) | 1,281 | 0.24 | 0.23 | 0.22 | 0.22 | 0.20 | 0.15 |
+
+* **Same area as the 2026-10-15 snapshot.** Restricted to the snapshot's 12 states and scanned area, every
+  source reproduces the snapshot's recall exactly, all 609 court-level records ≥ 150 m²: 0.89 / 0.86 / 0.84 /
+  0.81 / 0.74 / 0.59.
+  * Merging changed nothing there.
+  * Recall over the whole country is a little lower, 0.87 / 0.84 / 0.81 / 0.77 / 0.71 / 0.59, because it adds
+    the eastern sources.
+  * The snapshot's courts OSM lacks (86 records) gave 0.62 at 0.10 and 0.49 at 0.50. The national 516 give
+    0.63 and 0.47.
+* **Per source** (≥ 150 m² where a source is planimetric):
+
+  | source | rows | 0.10 | 0.25 | 0.40 | 0.50 | 0.60 | 0.70 |
+  |---|---|---|---|---|---|---|---|
+  | nyc_parks | 1,272 | 0.84 | 0.81 | 0.80 | 0.77 | 0.73 | 0.68 |
+  | chicago_parks | 323 | 0.89 | 0.85 | 0.80 | 0.75 | 0.70 | 0.50 |
+  | dc_planimetrics (all owners) | 224 | 0.83 | 0.80 | 0.78 | 0.73 | 0.66 | 0.45 |
+  | ramsey_county_planimetrics (all owners) | 190 | 0.83 | 0.74 | 0.66 | 0.62 | 0.55 | 0.32 |
+  | phoenix_pard | 155 | 0.95 | 0.92 | 0.92 | 0.89 | 0.83 | 0.73 |
+  | boston_bprd | 135 | 0.96 | 0.94 | 0.93 | 0.93 | 0.91 | 0.81 |
+  | columbus_crpd | 108 | 0.96 | 0.93 | 0.87 | 0.83 | 0.73 | 0.50 |
+  | denver_dpr | 102 | 0.83 | 0.78 | 0.72 | 0.71 | 0.61 | 0.43 |
+  | pittsburgh_courts | 99 | 0.95 | 0.92 | 0.90 | 0.87 | 0.79 | 0.64 |
+  | sf_rpd | 92 | 0.96 | 0.96 | 0.95 | 0.94 | 0.87 | 0.74 |
+  | cleveland_parks | 92 | 0.96 | 0.96 | 0.91 | 0.85 | 0.79 | 0.58 |
+  | san_jose_prns | 78 | 0.97 | 0.96 | 0.94 | 0.94 | 0.89 | 0.67 |
+  | austin_apr | 66 | 0.80 | 0.77 | 0.71 | 0.65 | 0.58 | 0.50 |
+  | raleigh_prcr | 58 | 0.67 | 0.67 | 0.57 | 0.40 | 0.24 | 0.22 |
+  | seattle_spr | 52 | 0.89 | 0.81 | 0.71 | 0.71 | 0.50 | 0.42 |
+  | okc_parks | 51 | 0.88 | 0.82 | 0.77 | 0.72 | 0.65 | 0.61 |
+  | ma_dcr_courts | 51 | 0.67 | 0.67 | 0.61 | 0.59 | 0.47 | 0.37 |
+  | nashville_metro_parks (TN, held out) | 43 | 0.88 | 0.88 | 0.86 | 0.77 | 0.72 | 0.58 |
+  | la_county_parks (park-level) | 618 | 0.87 | 0.85 | 0.83 | 0.78 | 0.73 | 0.61 |
+  | ri_scorp (park-level) | 195 | 0.94 | 0.90 | 0.88 | 0.83 | 0.77 | 0.61 |
+  | brec_parks (park-level) | 86 | 0.73 | 0.63 | 0.52 | 0.49 | 0.43 | 0.27 |
+
+* **Detections inside covered parks** that match an official court, all detections: 2,195 / 2,324 (0.94) at conf
+  0.5, and 2,659 / 3,248 (0.82) at 0.1. Most of these are courts OSM already has.
+* **Candidates, the new finds.** The honest number is for public candidates not near an OSM court. In a covered
+  park such a candidate can only match an official court OSM lacks. The share that do, at conf ≥ 0.5, is:
+
+  | `verify_scan` ≥ | 0 | 0.5 | 0.8 | 0.9 | 0.95 | 0.98 |
+  |---|---|---|---|---|---|---|
+  | public candidates (CONUS) | 57,401 | 50,070 | 36,645 | 25,200 | 14,879 | 5,431 |
+  | in covered parks: matched / all | 166 / 238 | 156 / 200 | 134 / 153 | 109 / 120 | 73 / 78 | 29 / 30 |
+  | share (lower bound on in-park precision) | 0.70 | 0.78 | 0.88 | 0.91 | 0.94 | **0.97** |
+  | recall on the 1,006 courts OSM lacks | 0.225 | 0.215 | 0.189 | 0.157 | 0.112 | 0.047 |
+
+### Review sheets and precision
+
+* **The sample.** `national review --name public_strata` drew public candidates screened by the CNN, 10 per
+  stratum of conf (0.3 / 0.5 / 0.6 / 0.7 / 1) × `verify_scan` (0.5 / 0.8 / 0.9 / 0.98 / 1). That is 160 crops,
+  each 96 m at 2×, with only a number on each.
+* **How they were labelled.** Blind, model-assistant labels, not gold:
+  * **C**: court markings or hoops visible
+  * **N**: clearly something else
+  * **U**: an unmarked slab or unclear
+* **Result.** 47 C, 38 N, 75 U. `national score` weights each stratum by its population and bootstraps a 95% CI.
+  Precision is C / (C + N):
+
+  | conf ≥ | `verify_scan` ≥ | candidates | precision (95% CI) | unsure counted as not |
+  |---|---|---|---|---|
+  | 0.3 | 0.5 | 67,199 | 0.50 (0.39–0.62) | 0.30 |
+  | 0.5 | 0.5 | 50,070 | 0.61 (0.46–0.72) | 0.37 |
+  | 0.5 | 0.8 | 36,645 | 0.70 (0.54–0.85) | 0.43 |
+  | 0.5 | 0.9 | 25,200 | 0.80 (0.58–0.98) | 0.50 |
+  | 0.3 | 0.98 | 5,982 | 0.90 (0.82–0.97) | 0.61 |
+  | **0.5** | **0.98** | **5,431** | **0.92 (0.85–0.98)** | 0.64 |
+  | 0.7 | 0.98 | 4,104 | 1.00 (7 C / 0 N / 3 U) | 0.70 |
+
+**Operating point for the app: public, conf ≥ 0.5, `verify_scan` ≥ 0.98, CNN-scored.**
+* **Why.** It is the loosest point where both pieces of evidence reach about 0.9 or better: the in-park truth
+  share is 0.97 (29 / 30), and the blind review gives 0.92 (0.85–0.98). At `verify_scan` ≥ 0.9 the review falls
+  to 0.80 with a wide CI.
+* **What it costs.** Low recall: it keeps 5,431 of the 57,401 public candidates at conf ≥ 0.5, and finds 47 of
+  the 1,006 official courts OSM lacks.
+* **Exported sample.** A second blind sample of **100 random exported candidates**
+  (`review/exported_sample`, no overlap with the first) gave **57 C, 2 N, 41 U**.
+  * That is precision **0.97 (Wilson 95% CI 0.89–0.99)**.
+  * Counting every unsure slab as not a court gives **0.57 (0.47–0.66)**.
+  * The two N were sand rectangles (volleyball courts or sand pits).
+  * The 41 U are mostly unmarked school blacktops and park slabs. Many show hoop-pole dots but no visible lines
+    at 0.6 m.
+  * No exported crop was on a home lot. One (AZ, inside an OSM `leisure=park` polygon in a subdivision,
+    `p_home` 0.60) looks like an HOA neighbourhood park, which may be residents-only.
+* **Combined.** With the 30 crops of the first sample in that stratum: 73 C, 6 N, 51 U, so about 0.92 excluding
+  unsure. Treat the exported candidates as "a court or a court-sized public blacktop, rarely anything else".
+
+### Outputs (`out/national/`, git-ignored)
+
+* **`detections.parquet`**: 983,856 merged detections, including near-OSM ones. Columns: id, conf, verify, lon,
+  lat, box (Albers `ax0..ay1`, `box_w_m`, `box_h_m`), edge, item_id, state, date, near_known_osm.
+* **`merge_stats.json`, `court_best_conf.json`**: merge counts, and OSM-court recall per state.
+* **`candidates_us.parquet`**: the 889,817 candidates.
+  * Scores: conf, `verify_scan` (in-scan), and from the rescore `verify`, `conf2`, `p_home`.
+  * Privacy: privacy, site, privacy_reason, and the `f_*` features.
+  * Box: `box_w_m`, `box_h_m`, edge, the Albers box `box_ax0..box_ay1` and its lon/lat bounds
+    `box_west/south/east/north`.
+  * NAIP: `naip_item`, `naip_date`.
+* **`rescore.parquet`**: the 214,197 rescored candidates. Their chips are on the node only. The 67,199 chips of
+  public candidates are in `data/national/rescore_chips/`.
+* **`privacy/<ST>.parquet`, `osm_privacy/<ST>.json` (+ `_detail`), `privacy_states.json`**: per-state classes
+  for candidates and OSM features.
+* **`state_summary.{json,csv}`, `scan_throughput.json`**: per-state counts (below), and per-node throughput from
+  the done markers.
+* **`review/public_strata/`, `review/exported_sample/`**: sheets, crops, `sample.json`, `labels.json` and
+  `scores.json`.
+* **`truth/`**: `truth_summary.json` (all of the above, snapshot comparison, grids) and one `eval_*.json` per
+  configuration.
+* **`app_ready/<ST>.geojson`**: 49 files, 84,324 features (78,893 OSM + 5,431 detected). They follow the app
+  schema, and detected features add `site`.
+  * They validate with `export_app.validate`, and ids are unique across files.
+  * `index.json` holds the operating point and the per-state counts. `exported_candidates.parquet` holds the
+    exported rows.
+  * `app/assets/data/courts.geojson` is unchanged. The national data is meant for a database.
+* **`node_logs/`**: the post node's job logs and its watchdog log.
+* **Also written**:
+  * `data/national/osm_phome.parquet`
+  * `data/national/osm_geojson/courts_<ST>.geojson` (the OSM input of `app-ready`)
+  * `data/sites/buildings_<ST>.parquet` for all 49 states
+
+### Per-state counts
+
+Candidates are not near an OSM court. Exported means public at the operating point above. OSM recall is on
+labelable OSM courts at conf ≥ 0.5. The table is sorted by candidates ≥ 0.5.
+
+| state | NAIP files | km² | candidates ≥ 0.1 | ≥ 0.5 | public ≥ 0.5 | private_home ≥ 0.5 | unknown ≥ 0.5 | exported candidates | OSM courts exported / all | OSM recall @ 0.5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CA | 11,074 | 410,046 | 50,572 | 23,091 | 17,628 | 3,983 | 744 | 2,954 | 14,990 / 18,218 | 0.85 |
+| TX | 17,224 | 688,231 | 119,762 | 16,928 | 4,005 | 7,773 | 4,457 | 74 | 3,892 / 5,210 | 0.69 |
+| FL | 4,016 | 151,327 | 31,618 | 7,799 | 3,464 | 3,333 | 683 | 394 | 4,707 / 6,102 | 0.82 |
+| PA | 3,354 | 117,498 | 33,451 | 6,708 | 1,772 | 3,181 | 1,627 | 100 | 3,760 / 4,392 | 0.82 |
+| OH | 3,049 | 107,033 | 41,315 | 6,047 | 1,234 | 3,327 | 1,354 | 39 | 3,433 / 4,383 | 0.67 |
+| NY | 3,923 | 127,230 | 26,427 | 5,543 | 1,629 | 2,647 | 1,049 | 112 | 4,607 / 5,600 | 0.77 |
+| NC | 3,575 | 128,947 | 33,920 | 5,206 | 1,591 | 2,202 | 1,121 | 80 | 1,311 / 1,821 | 0.72 |
+| MI | 4,840 | 151,439 | 31,080 | 4,794 | 1,283 | 2,380 | 955 | 45 | 2,492 / 3,054 | 0.65 |
+| GA | 3,909 | 152,784 | 30,064 | 4,748 | 1,114 | 2,200 | 1,188 | 64 | 913 / 1,437 | 0.75 |
+| IN | 2,687 | 93,896 | 32,017 | 4,658 | 1,025 | 2,503 | 1,027 | 24 | 1,627 / 2,100 | 0.75 |
+| MO | 4,970 | 180,782 | 41,934 | 4,117 | 991 | 1,843 | 1,195 | 11 | 1,017 / 1,245 | 0.68 |
+| WI | 4,473 | 145,592 | 30,808 | 3,654 | 1,034 | 1,768 | 755 | 21 | 1,549 / 1,735 | 0.68 |
+| NJ | 634 | 20,199 | 11,679 | 3,499 | 1,079 | 1,968 | 364 | 110 | 2,134 / 2,559 | 0.81 |
+| IL | 4,126 | 146,126 | 19,411 | 3,463 | 1,194 | 1,669 | 496 | 66 | 2,889 / 3,560 | 0.70 |
+| KY | 2,925 | 104,866 | 22,160 | 3,398 | 769 | 1,693 | 848 | 31 | 798 / 980 | 0.75 |
+| TN | 2,997 | 109,322 | 21,319 | 3,358 | 993 | 1,438 | 803 | 33 | 622 / 828 | 0.74 |
+| VA | 3,032 | 105,120 | 19,030 | 3,281 | 950 | 1,370 | 690 | 49 | 1,984 / 2,720 | 0.72 |
+| WA | 5,660 | 175,769 | 22,692 | 3,115 | 556 | 2,063 | 344 | 17 | 2,076 / 3,329 | 0.57 |
+| AZ | 7,592 | 295,472 | 10,684 | 3,061 | 1,431 | 1,288 | 174 | 263 | 3,073 / 4,452 | 0.72 |
+| AL | 3,482 | 134,087 | 20,902 | 2,801 | 746 | 1,126 | 816 | 22 | 531 / 652 | 0.68 |
+| MD | 906 | 26,885 | 10,853 | 2,602 | 786 | 1,324 | 358 | 41 | 1,746 / 2,098 | 0.76 |
+| SD | 5,963 | 199,937 | 26,951 | 2,518 | 235 | 458 | 1,817 | 7 | 305 / 387 | 0.69 |
+| SC | 2,146 | 80,731 | 13,202 | 2,514 | 859 | 956 | 612 | 37 | 788 / 1,011 | 0.77 |
+| MS | 3,234 | 123,722 | 16,051 | 2,270 | 524 | 858 | 787 | 18 | 221 / 301 | 0.71 |
+| LA | 3,249 | 122,397 | 12,882 | 2,241 | 787 | 768 | 558 | 52 | 392 / 475 | 0.67 |
+| MA | 737 | 21,378 | 7,679 | 2,137 | 518 | 1,328 | 249 | 65 | 1,972 / 2,467 | 0.80 |
+| MN | 6,761 | 218,859 | 13,031 | 1,999 | 573 | 1,091 | 303 | 43 | 1,788 / 2,313 | 0.64 |
+| UT | 6,021 | 220,086 | 11,990 | 1,972 | 671 | 1,167 | 92 | 33 | 1,014 / 1,530 | 0.56 |
+| NE | 5,618 | 200,552 | 16,169 | 1,867 | 445 | 722 | 671 | 1 | 626 / 807 | 0.61 |
+| OK | 4,727 | 181,303 | 8,900 | 1,827 | 803 | 592 | 339 | 51 | 590 / 784 | 0.61 |
+| CO | 7,390 | 269,810 | 6,881 | 1,621 | 782 | 677 | 111 | 47 | 1,943 / 2,616 | 0.63 |
+| NV | 7,486 | 271,878 | 3,932 | 1,435 | 1,037 | 285 | 55 | 304 | 697 / 832 | 0.83 |
+| OR | 7,446 | 251,570 | 8,870 | 1,432 | 429 | 785 | 164 | 8 | 1,128 / 1,705 | 0.57 |
+| WV | 1,827 | 62,953 | 7,512 | 1,427 | 384 | 703 | 309 | 23 | 315 / 393 | 0.76 |
+| AR | 3,595 | 137,999 | 8,154 | 1,410 | 560 | 502 | 299 | 35 | 542 / 639 | 0.62 |
+| NM | 8,007 | 315,157 | 8,913 | 1,385 | 516 | 480 | 296 | 11 | 972 / 1,230 | 0.67 |
+| KS | 5,856 | 213,296 | 7,194 | 1,376 | 534 | 606 | 170 | 18 | 562 / 794 | 0.61 |
+| IA | 4,235 | 145,928 | 8,002 | 1,275 | 446 | 640 | 177 | 21 | 935 / 1,363 | 0.56 |
+| ID | 6,544 | 216,733 | 6,753 | 1,099 | 397 | 512 | 151 | 14 | 579 / 706 | 0.65 |
+| CT | 411 | 12,988 | 4,476 | 1,059 | 258 | 613 | 144 | 18 | 857 / 1,023 | 0.80 |
+| ME | 2,862 | 85,253 | 5,251 | 806 | 224 | 336 | 231 | 13 | 392 / 476 | 0.72 |
+| MT | 11,764 | 381,155 | 5,575 | 762 | 310 | 319 | 123 | 5 | 256 / 318 | 0.62 |
+| WY | 7,311 | 253,527 | 6,122 | 605 | 248 | 204 | 142 | 4 | 246 / 290 | 0.63 |
+| ND | 5,684 | 183,317 | 6,024 | 569 | 120 | 228 | 210 | 4 | 441 / 599 | 0.54 |
+| NH | 764 | 24,131 | 2,474 | 544 | 126 | 308 | 98 | 10 | 325 / 486 | 0.73 |
+| DE | 176 | 5,251 | 1,959 | 366 | 83 | 209 | 64 | 3 | 208 / 251 | 0.89 |
+| RI | 114 | 2,901 | 1,167 | 355 | 112 | 197 | 36 | 24 | 266 / 358 | 0.80 |
+| VT | 811 | 24,993 | 1,810 | 338 | 112 | 147 | 75 | 10 | 208 / 255 | 0.86 |
+| DC | 11 | 183 | 195 | 60 | 34 | 14 | 5 | 2 | 174 / 214 | 0.84 |
+| **all** | **219,198** | **7,800,639** | **889,817** | **159,140** | **57,401** | **66,784** | **29,336** | **5,431** | **78,893 / 101,098** | **0.74** |
+
+**The export is regionally uneven.** CA has 54% of the exported candidates (2,954), while TX has 74 and MO 11.
+* The cause is not NAIP resolution. Even on known OSM courts at conf ≥ 0.5, the share with `verify_scan` ≥ 0.98
+  is 0.27 in CA, 0.35 in NV and 0.28 in FL, but 0.08 in TX, 0.05 in MO and 0.10 in OH, for 0.3 m and 0.6 m
+  imagery alike.
+* The verifier is less confident on some states' flights.
+* A per-state calibration, such as a threshold set from each state's known courts, would even out recall. It has
+  not been checked for precision.
+
+### Commands as run
+
+```bash
+# local: missing files (manifests vs done markers), bookkeeping, launch (watchdog installed and self-tested)
+bash cloud/launch.sh post gpu_1x_a100_sxm4,gpu_1x_a10 --max-hours 4
+HH_NODE=post bash cloud/sync_code.sh && HH_NODE=post bash cloud/start_stage.sh setup
+# inputs as tar streams over ssh: weights, courts_us, NAIP catalog, plan; data/scan2/US/results (one gzip -1 stream,
+# 45 min: Windows reads 438k small files at ~190/s); sites_us + residential_us (54 s)
+HH_NODE=post bash cloud/start_stage.sh job buildings python -m hoop_pipeline.sites buildings --states CONUS --workers 8
+HH_NODE=post bash cloud/start_stage.sh job phome bash cloud/national_post.sh phome
+HH_NODE=post bash cloud/start_stage.sh job rescan bash cloud/national_post.sh rescan data/scan2/US/rescan_missing.txt
+HH_NODE=post bash cloud/start_stage.sh job split python -m hoop_pipeline.national split-sites
+HH_NODE=post bash cloud/start_stage.sh job merge bash cloud/national_post.sh merge
+HH_NODE=post bash cloud/start_stage.sh job rescore env HH_RESCORE_MIN=0.3 HH_RESCORE_VERIFY=0.5 bash cloud/national_post.sh rescore
+HH_NODE=post bash cloud/start_stage.sh job privacy env HH_PRIVACY_MIN=0.1 bash cloud/national_post.sh privacy   # + summarize
+python -m hoop_pipeline.national review --name public_strata --classes public --verify-col verify_scan --require-phome \
+    --conf-bands 0.3 0.5 0.6 0.7 1.01 --verify-bands 0.5 0.8 0.9 0.98 1.001 --per-stratum 10 --crop-px 160 --thumb-px 320
+bash cloud/national_post.sh package data/scan2/US/rescan_missing.txt     # lists; then pulled home with tar -T
+bash cloud/terminate.sh post                                              # GET /instances -> 0
+# local
+python -m hoop_pipeline.national osm-geojson --out data/national/osm_geojson
+python -m hoop_pipeline.national score --name public_strata --labels out/national/review/public_strata/labels.json
+python -m hoop_pipeline.national app-ready --osm-dir data/national/osm_geojson --min-conf 0.5 --min-verify 0.98 \
+    --verify-col verify_scan --require-phome
+python -m hoop_pipeline.national review --name exported_sample --classes public --verify-col verify_scan --require-phome \
+    --conf-bands 0.5 1.01 --verify-bands 0.98 1.001 --per-stratum 100 --crop-px 160 --thumb-px 320 --seed 7
+python -m hoop_pipeline.national truth-eval
+```
+
+### Caveats
+
+* **Labels.** Every precision number above comes from model-assistant labels (blind, but not gold) or from a
+  truth share over only 30 in-park candidates.
+  * The C / N / U split leaves 41% of exported candidates unsure, so "precision" depends on how unmarked slabs
+    are counted.
+  * Eli's gold set (`tools/label/`) is still the way to settle it.
+* **Screen.** Only candidates in the CNN screen (conf ≥ 0.3, `verify_scan` ≥ 0.5) have `p_home`. Below it,
+  classes come from the rules alone, so low-confidence home-lot candidates are under-counted as private_home.
+* **Point-site leak.** The leak pattern from Tennessee still applies: a home court near an Overture church or
+  school point with a larger building nearby. None appeared among the 100 exported crops.
+  * HOA parks mapped as plain `leisure=park` count as public.
+* **OSM recall is optimistic.** Outside Tennessee, OSM courts were training positives.
+* **OSM data is not the latest.** `data/osm_us/courts_us.parquet` is the 2026-10-06 Geofabrik extract from run 1
+  (101,098 courts). Run 2 described a 2026-10-08 extract with 101,217.
+
 ## Limits (read before trusting a candidate)
 
 * **Painted courts and blacktops are detectable at 0.6 m; single hoops mostly
@@ -1914,14 +2318,14 @@ Costs assume A100 nodes at $1.99/h, each with a watchdog:
 | v2 Tennessee fleet scan (the lost run), then `post_scan_tn.sh` | v2's own every-pixel candidates and recall, the benchmark with TensorRT | 3 × ~25 min incl. setup, plus `main` ~40 min (privacy, review crops) | ~$4 |
 | rebuild `data/osm_us` (Geofabrik `pbf` + `osm` stages) | the context layer for new datasets or other states' site layers | 1 × ~40 min | ~$1.5 |
 | rebuild `data/crops` (`cropcls verifier-data` / `privacy context-data`) | retraining the verifier or the context CNN | 1 × ~20 min, after `data/osm_us` | ~$0.7 |
-| Overture buildings for CONUS (`sites buildings --states CONUS --workers 8`) | the house rule outside Tennessee | 1 × ~40–60 min (CPU) | ~$2 |
-| national scan (runbook) | every CONUS candidate | 8 × ~5 h, or 16 × ~2.5 h | ~$75–80, plus privacy and review |
+| ~~Overture buildings for CONUS~~ | done 2026-10-16 (30 min, see [National run](#national-run-2026-10-15)) | | |
+| ~~national scan (runbook)~~ | done 2026-10-15/16: 8 nodes, 5.6–15.4 h each | | ~$154 + $2.83 post-processing |
 
 1. **Label the gold set.** Eli labels `tools/label/` (300 tiles). Then run `gold score` for v2,
    and with `--preds data/gold/preds_v1.json` for v1. This gives the first honest CONUS precision
    and recall per stratum. Set the national export threshold from it: per stratum, the lowest
    score with ≥ 90% precision.
-2. **National scan.** Follow the [runbook](#national-scan-runbook-not-run-yet) once the gold
+2. **National scan.** Done; see [National run](#national-run-2026-10-15). What follows was the plan. Follow the [runbook](#national-scan-runbook) once the gold
    numbers are in. The CONUS plan (`data/scan2/US/plan.parquet`, 31 MB) is now local. Copy it
    to `main` (`hh_scp_up`) before `scan_fleet.sh push`, which reads from there. Expect ~10^5 candidates at 0.5. Review the uncertain bands in the
    labelling page or the app.
@@ -1978,6 +2382,7 @@ pipeline/
     privacy.py       privacy class + site type per candidate / OSM court; OSM-labelled context crops
     gold.py          stratified CONUS gold set: sample / fetch / annotate / export / score
     rescore.py       second opinion on scan candidates from fresh NAIP chips: v2, verifier, context CNN (CPU ok)
+    national.py      national post-processing: site slices, OSM p_home, per-state privacy, summary, review, app-ready, truth-eval
     truth.py         official court truth set: refresh / build / osm-compare / evaluate / export-labels / chips
     wkb_curves.py    linearise curve geometries (PAD-US) for shapely
   truth_sources.json registry of official court sources (endpoint, filter, fields, license quote, coverage, precision)
@@ -1988,6 +2393,7 @@ pipeline/
     install_watchdog.sh watchdog.py watchdog_github_action.yml.example                                  (local)
     setup_remote.sh run_remote.sh post_train_v2.sh post_scan_tn.sh requirements-cloud.txt             (instance)
     watchdog_install.sh watchdog_instance.py                                                          (instance, root)
+    national.sh national_node.sh national_scan.sh national_post.sh pull_results.py                    (national run)
     lastrun.py diag_reads.py bench_reads.py bench_infer.py bench_fastdet.py estimate_paved_fraction.py
     estimate_national.py bench_table.py compare_evals.py
     review_samples.py review_crops.py sample_review.py score_review.py disagree.py gold_review.py

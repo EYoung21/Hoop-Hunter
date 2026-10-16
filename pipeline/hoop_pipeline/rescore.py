@@ -62,6 +62,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--candidates", type=Path, required=True, help="scan_engine merge (or privacy classify) parquet")
     ap.add_argument("--min-conf", type=float, default=0.4)
+    ap.add_argument("--min-verify", type=float, default=None,
+                    help="also require the candidates file's own verifier score (the scan's in-stream 'verify') >= this")
     ap.add_argument("--include-known", action="store_true", help="also candidates near a known OSM court")
     ap.add_argument("--weights", type=Path, default=Path("weights/best_v2.pt"))
     ap.add_argument("--imgsz", type=int, default=416)
@@ -87,13 +89,18 @@ def main(argv: list[str] | None = None) -> None:
     d = pq.read_table(args.candidates).to_pydict()
     conf = np.asarray(d["conf"], float)
     near = np.asarray(d.get("near_known_osm") or [""] * len(conf), dtype=object)
-    sel = np.flatnonzero((conf >= args.min_conf) & ((near == "") | args.include_known))
+    keep = (conf >= args.min_conf) & ((near == "") | args.include_known)
+    if args.min_verify is not None:
+        v_scan = np.asarray([np.nan if v is None else v for v in d.get("verify") or [None] * len(conf)], float)
+        keep &= np.nan_to_num(v_scan, nan=-1.0) >= args.min_verify
+    sel = np.flatnonzero(keep)
     sel = sel[np.argsort(-conf[sel])]
     if args.shard:  # K/N: every N-th candidate starting at K, so N nodes can split one rescore
         k_, n_ = (int(v) for v in args.shard.split("/"))
         sel = sel[k_::n_]
-    log.info("%d candidates with conf >= %.2f%s%s", len(sel), args.min_conf, "" if args.include_known else " (not near OSM)",
-             f", shard {args.shard}" if args.shard else "")
+    log.info("%d candidates with conf >= %.2f%s%s%s", len(sel), args.min_conf,
+             "" if args.min_verify is None else f", scan verify >= {args.min_verify:.2f}",
+             "" if args.include_known else " (not near OSM)", f", shard {args.shard}" if args.shard else "")
     ids = np.asarray(d["id"], dtype=object)
     lon, lat = np.asarray(d["lon"], float), np.asarray(d["lat"], float)
     st = np.asarray(d.get("state") or ["TN"] * len(conf), dtype=object)
