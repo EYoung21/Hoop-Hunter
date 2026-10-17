@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { type CourtEntry, KIND_LABELS, siteLabel, sourceLabel } from '../data/classify';
@@ -9,6 +9,7 @@ import { MARKER_COLORS, type Theme, useTheme } from '../theme';
 import type { LatLng, ReviewDecision } from '../types';
 import { Button } from './Button';
 import { MarkerGlyph } from './MarkerGlyph';
+import { CourtSocial } from './social/CourtSocial';
 
 interface Props {
   /** The court to show, or null to slide the card away. */
@@ -96,6 +97,8 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
   const { court, kind } = shown;
   const site = siteLabel(court.site);
   const translateY = progress.interpolate({ inputRange: [0, 1], outputRange: [cardHeight + 24, 0] });
+  // The body scrolls once check-ins and runs make the card taller than most of the screen.
+  const bodyMaxHeight = Math.max(240, windowHeight * 0.78 - insets.top - 96);
 
   const confirmDelete = () =>
     Alert.alert('Delete this court?', 'It will be removed from this phone and from the courts you sent in.', [
@@ -140,49 +143,54 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
         </Pressable>
       </View>
 
-      {kind !== 'verified' && kind !== 'mine' ? (
-        <StatusLine
-          theme={theme}
-          color={MARKER_COLORS[kind]}
-          text={
-            court.confidence !== null
-              ? `${KIND_LABELS[kind]} · ${Math.round(court.confidence * 100)}% confidence`
-              : KIND_LABELS[kind]
-          }
-        />
-      ) : null}
-
-      <View style={styles.stats}>
-        <Stat theme={theme} label="Hoops" value={court.hoops !== null ? String(court.hoops) : 'Unknown'} />
-        <Stat theme={theme} label="Surface" value={capitalize(court.surface)} />
-        <Stat theme={theme} label="Lights" value={yesNo(court.lit)} />
-      </View>
-
-      {court.address ? <Detail theme={theme} icon="location-outline" text={court.address} /> : null}
-      {site ? <Detail theme={theme} icon="business-outline" text={site} /> : null}
-      {court.notes ? <Detail theme={theme} icon="document-text-outline" text={court.notes} /> : null}
-      {counts ? <Detail theme={theme} icon="people-outline" text={countsText(counts)} /> : null}
-
-      {kind === 'candidate' ? (
-        <>
-          <Text style={[styles.question, { color: theme.text }]}>Is this a basketball court?</Text>
-          <View style={styles.actions}>
-            <Button label="It's a court" icon="checkmark" color={theme.success} onPress={() => onReview(court.id, 'confirmed')} />
-            <Button label="Not a court" icon="close" variant="danger" onPress={() => onReview(court.id, 'rejected')} />
-          </View>
-          <View style={styles.actions}>
-            <Button label="Someone's home court" icon="home-outline" variant="secondary" onPress={() => onReview(court.id, 'home')} />
-          </View>
-        </>
-      ) : null}
-
-      <View style={styles.actions}>
-        <Button label="Directions" icon="navigate" variant={kind === 'candidate' ? 'secondary' : 'primary'} onPress={() => openDirections(court.coordinate)} />
-        {kind === 'confirmed' || kind === 'rejected' || kind === 'home' ? (
-          <Button label="Undo review" icon="arrow-undo" variant="secondary" onPress={() => onReview(court.id, null)} />
+      <ScrollView style={{ maxHeight: bodyMaxHeight }} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        {kind !== 'verified' && kind !== 'mine' ? (
+          <StatusLine
+            theme={theme}
+            color={MARKER_COLORS[kind]}
+            text={
+              court.confidence !== null
+                ? `${KIND_LABELS[kind]} · ${Math.round(court.confidence * 100)}% confidence`
+                : KIND_LABELS[kind]
+            }
+          />
         ) : null}
-        {kind === 'mine' ? <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} /> : null}
-      </View>
+
+        <View style={styles.stats}>
+          <Stat theme={theme} label="Hoops" value={court.hoops !== null ? String(court.hoops) : 'Unknown'} />
+          <Stat theme={theme} label="Surface" value={capitalize(court.surface)} />
+          <Stat theme={theme} label="Lights" value={yesNo(court.lit)} />
+        </View>
+
+        {court.address ? <Detail theme={theme} icon="location-outline" text={court.address} /> : null}
+        {site ? <Detail theme={theme} icon="business-outline" text={site} /> : null}
+        {court.notes ? <Detail theme={theme} icon="document-text-outline" text={court.notes} /> : null}
+        {counts ? <Detail theme={theme} icon="people-outline" text={countsText(counts)} /> : null}
+
+        {kind === 'candidate' ? (
+          <>
+            <Text style={[styles.question, { color: theme.text }]}>Is this a basketball court?</Text>
+            <View style={styles.actions}>
+              <Button label="It's a court" icon="checkmark" color={theme.success} onPress={() => onReview(court.id, 'confirmed')} />
+              <Button label="Not a court" icon="close" variant="danger" onPress={() => onReview(court.id, 'rejected')} />
+            </View>
+            <View style={styles.actions}>
+              <Button label="Someone's home court" icon="home-outline" variant="secondary" onPress={() => onReview(court.id, 'home')} />
+            </View>
+          </>
+        ) : null}
+
+        <View style={styles.actions}>
+          <Button label="Directions" icon="navigate" variant={kind === 'candidate' ? 'secondary' : 'primary'} onPress={() => openDirections(court.coordinate)} />
+          {kind === 'confirmed' || kind === 'rejected' || kind === 'home' ? (
+            <Button label="Undo review" icon="arrow-undo" variant="secondary" onPress={() => onReview(court.id, null)} />
+          ) : null}
+          {kind === 'mine' ? <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} /> : null}
+        </View>
+
+        {/* Check-ins and runs; not at a candidate you said isn't a public court. */}
+        {kind !== 'rejected' && kind !== 'home' ? <CourtSocial key={court.id} court={court} /> : null}
+      </ScrollView>
     </Animated.View>
   );
 }
@@ -231,6 +239,10 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
     gap: 14,
     boxShadow: '0px -4px 16px rgba(0, 0, 0, 0.18)',
+  },
+  body: {
+    gap: 14,
+    paddingBottom: 2,
   },
   grabber: {
     alignSelf: 'center',

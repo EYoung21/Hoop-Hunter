@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { FLOATING_SHADOW, useTheme } from '../theme';
 import type { MapStyle } from '../types';
@@ -12,12 +12,16 @@ interface Props {
   onLocate: () => void;
   placing: boolean;
   onAdd: () => void;
+  onOpenSocial: () => void;
+  /** Current streak, shown on the "You" button when above 0. */
+  streak: number;
 }
 
-export function MapControls({ mapStyle, onToggleMapStyle, locating, onLocate, placing, onAdd }: Props) {
+export function MapControls({ mapStyle, onToggleMapStyle, locating, onLocate, placing, onAdd, onOpenSocial, streak }: Props) {
   const satellite = mapStyle === 'satellite';
   return (
     <View style={styles.column}>
+      <RoundButton icon="person" label="You, friends and leaderboards" onPress={onOpenSocial} badge={streak > 0 ? streak : undefined} />
       <RoundButton
         icon={satellite ? 'map-outline' : 'earth'}
         label={satellite ? 'Show standard map' : 'Show satellite map'}
@@ -35,9 +39,11 @@ interface RoundButtonProps {
   onPress: () => void;
   busy?: boolean;
   active?: boolean;
+  /** Small count in the corner (the streak). */
+  badge?: number;
 }
 
-function RoundButton({ icon, label, onPress, busy = false, active = false }: RoundButtonProps) {
+function RoundButton({ icon, label, onPress, busy = false, active = false, badge }: RoundButtonProps) {
   const theme = useTheme();
   const tint = active ? theme.onAccent : theme.text;
   return (
@@ -54,6 +60,12 @@ function RoundButton({ icon, label, onPress, busy = false, active = false }: Rou
       ]}
     >
       {busy ? <ActivityIndicator color={theme.accent} /> : <Ionicons name={icon} size={22} color={tint} />}
+      {badge !== undefined ? (
+        <View style={[styles.badge, { backgroundColor: theme.accent, borderColor: theme.surface }]}>
+          <Ionicons name="flame" size={10} color={theme.onAccent} />
+          <Text style={[styles.badgeText, { color: theme.onAccent }]}>{badge}</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -72,5 +84,23 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.75,
+  },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -6,
+    minWidth: 22,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    paddingHorizontal: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '800',
   },
 });

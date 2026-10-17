@@ -16,6 +16,7 @@ import {
   USER_ZOOM_DELTA,
 } from '../data/viewport';
 import { hasLocationPermission, locateUser } from '../location';
+import { useSocial } from '../social/SocialProvider';
 import { useTheme } from '../theme';
 import type { Court, CourtFilter, LatLng, MapStyle } from '../types';
 import { AddCourtForm } from './AddCourtForm';
@@ -26,6 +27,7 @@ import { FilterBar } from './FilterBar';
 import { Legend } from './Legend';
 import { MapControls } from './MapControls';
 import { MapStatus } from './MapStatus';
+import { SocialScreen } from './social/SocialScreen';
 
 /**
  * On iOS a tap on a marker can also reach the map's own onPress. Map presses this
@@ -50,6 +52,8 @@ export function MapScreen() {
   const [draftCoordinate, setDraftCoordinate] = useState<LatLng | null>(null);
   const [showsUserLocation, setShowsUserLocation] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [socialOpen, setSocialOpen] = useState(false);
+  const social = useSocial();
 
   // Show the blue dot right away if location was allowed before; never prompts.
   useEffect(() => {
@@ -166,6 +170,18 @@ export function MapScreen() {
     setSelectedId(court.id);
   };
 
+  // From the You screen (your check-in, your runs): close it and show the court.
+  const openCourt = (courtId: string, coordinate: LatLng | null) => {
+    setSocialOpen(false);
+    setPlacing(false);
+    setSelectedId(courtId);
+    const target = coordinate ?? entries.find((entry) => entry.court.id === courtId)?.court.coordinate;
+    if (target) {
+      lastMarkerPress.current = Date.now();
+      mapRef.current?.animateToRegion({ ...target, latitudeDelta: USER_ZOOM_DELTA, longitudeDelta: USER_ZOOM_DELTA }, 600);
+    }
+  };
+
   const handleDelete = (id: string) => {
     deleteCourt(id);
     setSelectedId(null);
@@ -232,6 +248,11 @@ export function MapScreen() {
             onLocate={handleLocate}
             placing={placing}
             onAdd={handleStartPlacing}
+            onOpenSocial={() => {
+              setPlacing(false);
+              setSocialOpen(true);
+            }}
+            streak={social.status === 'ready' ? (social.profile?.streak ?? 0) : 0}
           />
         </View>
       </View>
@@ -241,6 +262,8 @@ export function MapScreen() {
       {draftCoordinate ? (
         <AddCourtForm coordinate={draftCoordinate} onCancel={() => setDraftCoordinate(null)} onSave={handleSaveCourt} />
       ) : null}
+
+      {socialOpen ? <SocialScreen onClose={() => setSocialOpen(false)} onOpenCourt={openCourt} /> : null}
 
       <StatusBar style={satellite ? 'light' : 'auto'} />
     </View>

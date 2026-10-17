@@ -11,6 +11,12 @@ const USER_COURTS_KEY = 'hoop-hunter:user-courts:v1';
 const SYNC_KEY = 'hoop-hunter:sync:v1';
 /** Courts last loaded from the server and the areas they cover, for offline use. See useRemoteCourts. */
 const COURT_CACHE_KEY = 'hoop-hunter:court-cache:v1';
+/** "under13" once the player said they're under 13: social features stay off on this phone. */
+const AGE_GATE_KEY = 'hoop-hunter:age-gate:v1';
+/** The last social profile loaded (handle, XP, streak, badges), so the You screen works offline. */
+const SOCIAL_PROFILE_KEY = 'hoop-hunter:social-profile:v1';
+/** Check-ins and run actions made offline, waiting to be sent. See social/queue.ts. */
+const SOCIAL_QUEUE_KEY = 'hoop-hunter:social-queue:v1';
 
 async function readJson(key: string): Promise<unknown> {
   const stored = await AsyncStorage.getItem(key);
@@ -78,4 +84,28 @@ export function loadCourtCache(): Promise<unknown> {
 
 export function saveCourtCache(cache: unknown): Promise<void> {
   return AsyncStorage.setItem(COURT_CACHE_KEY, JSON.stringify(cache));
+}
+
+export async function loadUnder13(): Promise<boolean> {
+  return (await AsyncStorage.getItem(AGE_GATE_KEY)) === 'under13';
+}
+
+export function saveUnder13(): Promise<void> {
+  return AsyncStorage.setItem(AGE_GATE_KEY, 'under13');
+}
+
+export function loadSocialProfile(): Promise<unknown> {
+  return readJson(SOCIAL_PROFILE_KEY);
+}
+
+export function saveSocialProfile(profile: unknown): Promise<void> {
+  return profile === null ? AsyncStorage.removeItem(SOCIAL_PROFILE_KEY) : AsyncStorage.setItem(SOCIAL_PROFILE_KEY, JSON.stringify(profile));
+}
+
+export function loadSocialQueue(): Promise<unknown> {
+  return readJson(SOCIAL_QUEUE_KEY);
+}
+
+export function saveSocialQueue(queue: unknown): Promise<void> {
+  return AsyncStorage.setItem(SOCIAL_QUEUE_KEY, JSON.stringify(queue));
 }
