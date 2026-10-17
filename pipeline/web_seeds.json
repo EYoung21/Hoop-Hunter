@@ -1,0 +1,428 @@
+{
+ "about": "Park directories of large cities and counties for hoop_pipeline.websources expand. Each entry: start_urls (a directory page or the site's sitemap.xml), park_link (regex for park-page URLs), optional next_link (regex for pagination / A-Z listing pages), bbox [west, south, east, north] for name matching, or pages (single pages fetched as they are, e.g. an amenity chart). Found by hand on 2026-10-17 through the polite fetcher (robots.txt honoured). Sites that refused us (robots 403, bot challenge) are listed under 'not_usable' with the reason.",
+ "directories": [
+  {
+   "key": "jacksonville_parks",
+   "city": "Jacksonville",
+   "state": "FL",
+   "bbox": [
+    -82.1,
+    30.05,
+    -81.3,
+    30.65
+   ],
+   "start_urls": [
+    "https://www.jacksonville.gov/departments/parks-and-recreation/jaxparks/all-parks"
+   ],
+   "park_link": "^https://www\\.jacksonville\\.gov/departments/parks-and-recreation/jaxparks/(all-parks|community-centers|preservation-parks)/[^/#?]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 600,
+   "platform": "custom (ASP.NET)",
+   "notes": "451 park pages; amenities are icons with data-key attributes."
+  },
+  {
+   "key": "arlington_tx_parks",
+   "city": "Arlington",
+   "state": "TX",
+   "bbox": [
+    -97.26,
+    32.56,
+    -97.02,
+    32.84
+   ],
+   "start_urls": [
+    "https://www.arlingtontx.gov/sitemap.xml"
+   ],
+   "park_link": "^https://www\\.arlingtontx\\.gov/Parks-Places/Parks-Trails/Park-Finder/[A-Za-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 200,
+   "platform": "Granicus OpenCities",
+   "notes": "92 Park Finder pages from the sitemap (the listing pages with form buttons)."
+  },
+  {
+   "key": "fort_worth_parks",
+   "city": "Fort Worth",
+   "state": "TX",
+   "bbox": [
+    -97.62,
+    32.52,
+    -97.0,
+    33.08
+   ],
+   "start_urls": [
+    "https://www.fortworthtexas.gov/sitemap.xml"
+   ],
+   "park_link": "^https://www\\.fortworthtexas\\.gov/departments/parks/parks-and-trails/(?!park-rules)[A-Za-z0-9_-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 400,
+   "platform": "Granicus OpenCities",
+   "notes": "285 park pages from the sitemap."
+  },
+  {
+   "key": "austin_parks",
+   "city": "Austin",
+   "state": "TX",
+   "bbox": [
+    -98.0,
+    30.05,
+    -97.5,
+    30.55
+   ],
+   "start_urls": [
+    "https://www.austintexas.gov/parks/locations"
+   ],
+   "park_link": "^https://www\\.austintexas\\.gov/parks/(locations/)?(?!park-directory$|pools-and-splash-pads$|community-recreation-centers$|aquatics-home$|services$|programs$|projects$|about-austin-parks-and-recreation$|contact$|locations$)[a-z0-9-]+$",
+   "next_link": "^https://www\\.austintexas\\.gov/parks/locations\\?page=\\d+$",
+   "max_listing_pages": 12,
+   "max_pages": 150,
+   "platform": "Drupal",
+   "notes": "Partial: about 90 facilities (rec centers, pools, some parks)."
+  },
+  {
+   "key": "tucson_parks",
+   "city": "Tucson",
+   "state": "AZ",
+   "bbox": [
+    -111.2,
+    31.98,
+    -110.68,
+    32.42
+   ],
+   "start_urls": [
+    "https://www.tucsonaz.gov/sitemap.xml"
+   ],
+   "park_link": "^https://www\\.tucsonaz\\.gov/Departments/Parks-and-Recreation/Parks/(?!Find-a-Park|Park-Rules|Dog-Parks/?$|Skate-Parks/?$|Boating-and-Fishing|ParkRx|Leash-up-Clean-Up|Greenways/?$)[A-Za-z0-9.-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 200,
+   "platform": "Granicus OpenCities",
+   "notes": "135 park pages from the sitemap."
+  },
+  {
+   "key": "mesa_parks",
+   "city": "Mesa",
+   "state": "AZ",
+   "bbox": [
+    -111.92,
+    33.25,
+    -111.55,
+    33.53
+   ],
+   "start_urls": [
+    "https://www.mesaaz.gov/sitemap.xml"
+   ],
+   "park_link": "^https://www\\.mesaaz\\.gov/Activities-Culture/Parks-Recreation-and-Community-Facilities/Parks-Facilities/(?!Facility-Reservations|Trails/?$|Park-Open-Spaces-and-Basins)[A-Za-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 150,
+   "platform": "Granicus OpenCities",
+   "notes": "73 pages from the sitemap (a few venues too)."
+  },
+  {
+   "key": "las_vegas_parks",
+   "city": "Las Vegas",
+   "state": "NV",
+   "bbox": [
+    -115.45,
+    36.08,
+    -115.04,
+    36.38
+   ],
+   "start_urls": [
+    "https://www.lasvegasnevada.gov/Residents/Parks-Facilities"
+   ],
+   "park_link": "^https://www\\.lasvegasnevada\\.gov/Residents/Parks-Facilities/[A-Za-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 200,
+   "platform": "DNN",
+   "notes": "118 facility pages (parks, pools, community centers)."
+  },
+  {
+   "key": "memphis_parks",
+   "city": "Memphis",
+   "state": "TN",
+   "bbox": [
+    -90.18,
+    34.98,
+    -89.62,
+    35.3
+   ],
+   "start_urls": [
+    "https://memphisparks.com/find-a-park/"
+   ],
+   "park_link": "^https://memphisparks\\.com/park/[a-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 300,
+   "platform": "WordPress",
+   "notes": "158 park pages; robots.txt Crawl-delay 10 is honoured."
+  },
+  {
+   "key": "virginia_beach_parks",
+   "city": "Virginia Beach",
+   "state": "VA",
+   "bbox": [
+    -76.25,
+    36.54,
+    -75.84,
+    36.96
+   ],
+   "start_urls": [
+    "https://parks.virginiabeach.gov/outdoors/city-parks"
+   ],
+   "park_link": "^https://parks\\.virginiabeach\\.gov/outdoors/city-parks/(?!city-park-rules-regulations)[a-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 50,
+   "platform": "custom (Vue)",
+   "notes": "Partial: 19 major city parks (the full ParkFinder answers robots.txt with 403)."
+  },
+  {
+   "key": "albuquerque_charts",
+   "city": "Albuquerque",
+   "state": "NM",
+   "bbox": [
+    -106.88,
+    34.94,
+    -106.47,
+    35.22
+   ],
+   "pages": [
+    "https://www.cabq.gov/parksandrecreation/parks/city-parks/parks-with-amenities",
+    "https://www.cabq.gov/parksandrecreation/parks/city-parks/basketball-court-locations"
+   ],
+   "notes": "No per-park pages; amenity charts on two pages."
+  },
+  {
+   "key": "indianapolis_parks",
+   "city": "Indianapolis",
+   "state": "IN",
+   "bbox": [
+    -86.33,
+    39.63,
+    -85.93,
+    39.93
+   ],
+   "start_urls": [
+    "https://parks.indy.gov/parks/",
+    "https://parks.indy.gov/parks-sitemap.xml"
+   ],
+   "park_link": "^https://parks\\.indy\\.gov/parks/[a-z0-9-]+/?$",
+   "max_listing_pages": 2,
+   "max_pages": 400,
+   "platform": "WordPress",
+   "notes": "181 park pages on /parks/ (180 in parks-sitemap.xml). Fall Creek & 30th: 'two renovated basketball courts' (count=2). Wes Montgomery: 'basketball pavilion' lines but judge_page says open_gym/court=False. 50 family centers at /facilities/<slug>/ not included."
+  },
+  {
+   "key": "colorado_springs_parks",
+   "city": "Colorado Springs",
+   "state": "CO",
+   "bbox": [
+    -104.93,
+    38.7,
+    -104.6,
+    39.06
+   ],
+   "start_urls": [
+    "https://coloradosprings.gov/parks",
+    "https://coloradosprings.gov/parks/page/neighborhood-parks"
+   ],
+   "park_link": "^https://coloradosprings\\.gov/parks/page/(?:[a-z0-9-]*-park(?:-\\d+)?|neighborhood-parks)$",
+   "max_listing_pages": 2,
+   "max_pages": 60,
+   "platform": "Drupal",
+   "notes": "19 links: community and regional parks have their own pages, but the ~135 neighborhood parks are only on the single neighborhood-parks page (one name heading plus amenity line each, many with 'Basketball court'), so it needs row-level extraction. Rampart and Monument Valley list basketball. sitemap.xml is paginated and mostly news."
+  },
+  {
+   "key": "aurora_co_parks",
+   "city": "Aurora",
+   "state": "CO",
+   "bbox": [
+    -104.89,
+    39.55,
+    -104.46,
+    39.84
+   ],
+   "platform": "Granicus govAccess",
+   "notes": "No per-park pages. One table page holds all ~100 parks as 'Name Address | acres, amenities' rows, e.g. 'City Park 9701 E. 16th Ave. | basketball courts (2)'. It needs row-level extraction; park_link only matches the page's link to itself.",
+   "pages": [
+    "https://www.auroragov.org/things_to_do/parks__open_space___trails/park_listing"
+   ]
+  },
+  {
+   "key": "detroit_regional_parks",
+   "city": "Detroit",
+   "state": "MI",
+   "bbox": [
+    -83.29,
+    42.25,
+    -82.9,
+    42.46
+   ],
+   "start_urls": [
+    "https://detroitmi.gov/departments/detroit-parks-recreation/parks-and-greenways/regional-and-riverfront-parks"
+   ],
+   "park_link": "^https://detroitmi\\.gov/departments/detroit-parks-recreation/parks-and-greenways/(?:regional-and-riverfront-parks/)?[a-z0-9-]+-park$",
+   "max_listing_pages": 1,
+   "max_pages": 30,
+   "platform": "Drupal",
+   "notes": "Covers only the 14 regional/riverfront parks. Erma Henderson: 'basketball courts'. Farwell's page is a construction update with no basketball. About 300 neighborhood parks exist only as /taxonomy/term/<id> pages with no listing, and robots.txt blocks sitemap.xml?page=N."
+  },
+  {
+   "key": "prince_georges_parks",
+   "city": "Prince George's County",
+   "state": "MD",
+   "bbox": [
+    -77.09,
+    38.53,
+    -76.66,
+    39.13
+   ],
+   "start_urls": [
+    "https://www.pgparks.com/parks_trails-sitemap.xml"
+   ],
+   "park_link": "^https://www\\.pgparks\\.com/parks_trails/[a-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 600,
+   "platform": "WordPress (Yoast sitemaps)",
+   "notes": "293 park pages. Amenities are icons only: <img alt='Icon of a basketball.' title='Basketball Courts'>. Watkins Regional shows the line 'Icon of a basketball.', but judge_page says court=False; the parser should map that alt text or the img title. Cosca: no basketball. The homepage has thousands of event links, so use the sitemap."
+  },
+  {
+   "key": "anne_arundel_parks",
+   "city": "Anne Arundel County",
+   "state": "MD",
+   "bbox": [
+    -76.84,
+    38.7,
+    -76.39,
+    39.24
+   ],
+   "start_urls": [
+    "https://www.aacounty.org/recreation-parks/parks",
+    "https://www.aacounty.org/recreation-parks/parks/community-parks"
+   ],
+   "park_link": "^https://www\\.aacounty\\.org/(?:locations/[a-z0-9-]+|recreation-parks/parks/(?:community-parks/)?[a-z0-9-]*(?:park|sanctuary))$",
+   "next_link": "^https://www\\.aacounty\\.org/recreation-parks/parks/community-parks\\?page=\\d+$",
+   "max_listing_pages": 30,
+   "max_pages": 300,
+   "platform": "Drupal",
+   "notes": "Regional parks are at /recreation-parks/parks/<slug>. The community-parks listing (?page=0..23, 5 parks per page) links mostly to /locations/<slug> pages with a 'Park Amenities' list. Lake Waterford: 'tennis or basketball courts'. Bay Head, Arnold and Beachwood: no basketball. The site's sitemap.xml is empty."
+  },
+  {
+   "key": "st_louis_parks",
+   "city": "St. Louis",
+   "state": "MO",
+   "bbox": [
+    -90.33,
+    38.53,
+    -90.16,
+    38.78
+   ],
+   "start_urls": [
+    "https://www.stlouis-mo.gov/government/departments/parks/parks/browse-parks/index.cfm"
+   ],
+   "park_link": "^https://www\\.stlouis-mo\\.gov/government/departments/parks/parks/browse-parks/view-park\\.cfm\\?parkID=\\d+(?:&parkName=[^&#]*)?$",
+   "max_listing_pages": 1,
+   "max_pages": 200,
+   "platform": "custom (ColdFusion/CommonSpot)",
+   "notes": "108 parks. Fairground and O'Fallon have basketball lines; Willmore has none. Ground truth: index.cfm?action=filterByAmenity&amenitySubType=42 lists the 33 parks with basketball courts."
+  },
+  {
+   "key": "cincinnati_parks_crc",
+   "city": "Cincinnati",
+   "state": "OH",
+   "bbox": [
+    -84.72,
+    39.05,
+    -84.36,
+    39.23
+   ],
+   "start_urls": [
+    "https://www.cincinnati-oh.gov/cincyparks/visit-a-park/find-a-parkfacility/",
+    "https://www.cincinnati-oh.gov/crc/find-a-facility/recreation-center/"
+   ],
+   "park_link": "^https://www\\.cincinnati-oh\\.gov/(?:cincyparks/visit-a-park/find-a-parkfacility|crc/find-a-facility/recreation-center)/[a-z0-9-]+/$",
+   "max_listing_pages": 2,
+   "max_pages": 150,
+   "platform": "custom (cincinnati-oh.gov CMS)",
+   "notes": "77 Cincinnati Parks pages plus 22 CRC recreation centers; cincinnatiparks.com redirects here. Ziegler Park: 'Basketball Courts'. Inwood: none. Bond Hill CRC: 'Basketball (icon)'. CRC outdoor courts are only on the JS map at sports-field-or-court."
+  },
+  {
+   "key": "vancouver_wa_parks",
+   "city": "Vancouver",
+   "state": "WA",
+   "bbox": [
+    -122.78,
+    45.57,
+    -122.46,
+    45.73
+   ],
+   "start_urls": [
+    "https://www.cityofvancouver.us/parks_trails-sitemap.xml"
+   ],
+   "park_link": "^https://www\\.cityofvancouver\\.us/parks_trails/[a-z0-9-]+/?$",
+   "max_listing_pages": 1,
+   "max_pages": 150,
+   "platform": "WordPress (Yoast sitemaps)",
+   "notes": "86 park and trail pages. Amenities are an icon list ('Basketball Half Court'). Diamond and Bella Vista: yes. Marshall: none. An amenities-sitemap.xml also exists."
+  },
+  {
+   "key": "la_county_parks",
+   "city": "Los Angeles County",
+   "state": "CA",
+   "bbox": [
+    -118.95,
+    33.28,
+    -117.64,
+    34.83
+   ],
+   "start_urls": [
+    "https://parks.lacounty.gov/page-sitemap.xml"
+   ],
+   "park_link": "^https://parks\\.lacounty\\.gov/(?![a-z0-9-]*(?:golf|equestrian|wildlife|sanctuary|staging|rest-area|planning|project|translation))[a-z0-9-]*(?:park|recreation-area|sports-complex|aquatic-center|rec-center)(?:-\\d)?/$",
+   "max_listing_pages": 1,
+   "max_pages": 300,
+   "platform": "WordPress",
+   "notes": "Park pages sit at root slugs mixed with generic pages, so the regex is name-based (110 matches, with some '-2' duplicates). Jesse Owens and East Rancho Dominguez: outdoor and indoor basketball court. Roy Campanella: 'basketball court'. Athens: none. Nature centers and wildlife sanctuaries are excluded."
+  },
+  {
+   "key": "oakland_rec_centers",
+   "city": "Oakland",
+   "state": "CA",
+   "bbox": [
+    -122.36,
+    37.69,
+    -122.11,
+    37.89
+   ],
+   "start_urls": [
+    "https://www.oaklandca.gov/Community/Parks-Facilities"
+   ],
+   "park_link": "^https://www\\.oaklandca\\.gov/Community/Parks-Facilities/(?:Recreation-Centers|Parks)/[A-Za-z0-9.-]+$",
+   "max_listing_pages": 1,
+   "max_pages": 60,
+   "platform": "Granicus OpenCities",
+   "notes": "Only 24 recreation centers plus 2 parks (Joaquin Miller, Lakeside) have pages; most city parks have none. The hub page links all 24 rec centers, while the Recreation-Centers list uses ASP.NET postback paging. Amenities are in ul.venue-feature-list. Arroyo Viejo: 'Basketball Court'. Brookdale: 'Full-size basketball courts'. The first parse of Arroyo returned 0 lines and a refetch was fine, so this may be flaky."
+  }
+ ],
+ "not_usable": {
+  "Houston TX": "A-Z lists link only to PDF inventories; park pages answer 403 to this client",
+  "El Paso TX": "Find a Park is a GIS map only; no park pages in the sitemap",
+  "Henderson NV": "robots.txt answers 403 (treated as disallow all)",
+  "Tulsa OK": "park list links only to an ArcGIS Experience map",
+  "New Orleans LA (NORD)": "A-Z list built by JavaScript, no sitemap",
+  "Atlanta GA": "robots.txt on atlantaga.gov answers 403",
+  "Charlotte / Mecklenburg NC": "no per-park links; GIS Park Explorer only",
+  "Miami-Dade FL": "park finder and park pages load amenities by JavaScript; no sitemap",
+  "Virginia Beach ParkFinder": "vbparkfinder.virginiabeach.gov robots.txt answers 403",
+  "Los Angeles (laparks.org)": "robots.txt answers 403",
+  "New York (nycgovparks.org)": "robots.txt / pages answer 403 (NYC is covered by the official truth layer)",
+  "San Jose (sanjoseca.gov)": "robots.txt answers 403 (covered by the truth layer)",
+  "San Antonio (sanantonio.gov)": "robots.txt disallows the park pages",
+  "Milwaukee County WI": "Find-a-Park offers only PDF maps and a JavaScript map, no park pages",
+  "Omaha NE": "parks.cityofomaha.org answers 403 for robots.txt (treated as disallow all)",
+  "Fresno CA": "park names without links; PDF maps only",
+  "Bakersfield CA": "CivicPlus site rendered in the browser; no park pages in the sitemap",
+  "Riverside CA": "only pages per amenity type; no per-park pages",
+  "Baltimore MD": "bcrp.baltimorecity.gov answers 403 for robots.txt",
+  "Louisville KY": "bot challenge (403) on the park list",
+  "Buffalo NY": "department page only; the facility directory has no parks",
+  "Spokane WA": "park finder links only PDF maps"
+ }
+}

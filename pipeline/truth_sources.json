@@ -1623,7 +1623,7 @@
    "license": {
     "name": "State of Tennessee disclaimer only",
     "url": "https://www.arcgis.com/home/item.html?id=f6c2e7523bee4312a9bf1c34ab4df394",
-    "quote": "The State of Tennessee makes no representation or warranty as to the accuracy of this data ... The user accepts this data on an 'AS IS' basis",
+    "quote": "Item licenseInfo (re-checked 2026-10-17, unchanged): 'The State of Tennessee makes no representation or warranty as to the accuracy of this data ... The user accepts this data on an AS IS basis ...' Liability disclaimer only; no grant of reuse. accessInformation credits USFW, USNPS, USFS, USACE, TVA, Trust for Public Land, TDEC, TN Division of Forestry, THRIVE, TRPA and Nashville Metro: a compilation that includes non-government (Trust for Public Land) data with its own terms.",
     "status": "unclear"
    },
    "attribution": "State of Tennessee",
@@ -1639,11 +1639,11 @@
     },
     "description": "the same recreation-area polygons"
    },
-   "notes": "DISABLED until the State confirms reuse terms. Covers Memphis, Knoxville and Chattanooga at park level, where no city court layer is published."
+   "notes": "DISABLED (re-checked 2026-10-17): disclaimer only, Tennessee has no rule like Florida's that state records carry no copyright, and part of the compilation is Trust for Public Land data. Needs a reuse statement from the State before use. Covers Memphis, Knoxville and Chattanooga at park level."
   },
   {
    "key": "fl_fori",
-   "enabled": false,
+   "enabled": true,
    "name": "Florida Outdoor Recreation Inventory (FORI)",
    "publisher": "Florida DEP Division of Recreation and Parks",
    "city": "Florida (statewide)",
@@ -1681,17 +1681,257 @@
    "public": true,
    "tier": "official",
    "license": {
-    "name": "FDEP GIS data disclaimer (no grant of reuse)",
+    "name": "Florida public record; FDEP GIS Data Disclaimer (no copyright asserted; redistribution contemplated)",
     "url": "http://ca.dep.state.fl.us/AGO/AGOImages/OpenDataSite/FDEP%20Data%20Disclaimer.pdf",
-    "quote": "Item licenseInfo: 'This data is intended to be used for informational and planning purposes.' The FDEP disclaimer only limits liability.",
-    "status": "unclear"
+    "quote": "Item licenseInfo (re-checked 2026-10-17): 'This data is intended to be used for informational and planning purposes.' FDEP GIS Data Disclaimer: 'FDEP GIS data is provided as a public service ... FDEP shall have no liability, in any case, to the use of provided data (including redistribution and reproduction).' Published by FDEPOpenDataPortal on the FDEP Open Data Portal. Florida public records (F.S. ch. 119): an agency may not claim copyright in a public record without statutory authorization (Microdecisions, Inc. v. Skinner, 889 So. 2d 871, Fla. 2d DCA 2004), and none covers this inventory.",
+    "status": "public_record_no_copyright"
    },
    "attribution": "FDEP, Division of Recreation and Parks",
    "coverage": {
     "kind": "none",
     "complete": "partial: 2,697 sites / 4,958 courts statewide from sources of varying age (830 rows stamped before 2016)."
    },
-   "notes": "DISABLED until FDEP confirms reuse terms. Largest statewide set found; site points with counts; includes commercial/club sites."
+   "notes": "Enabled 2026-10-17 after the license re-check (public record, no copyright claimable, disclaimer contemplates redistribution); internal evaluation only, like every truth source. Site points with counts; includes commercial/club sites (public=false). Sources of varying age (830 rows stamped before 2016)."
+  },
+  {
+   "key": "vt_anr_ori",
+   "name": "Outdoor Recreation Sites Inventory (basketball courts per site)",
+   "publisher": "Vermont Agency of Natural Resources / VT Forests, Parks and Recreation",
+   "city": "Vermont (statewide)",
+   "state": "VT",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=9f1607543b884d4590a0dbeb00deafa5",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://anrmaps.vermont.gov/arcgis/rest/services/Open_Data/OPENDATA_ANR_TOURISM_SP_NOCACHE_v2/MapServer/166",
+    "where": "1=1"
+   },
+   "select": {
+    "all": [
+     {
+      "field": "Q_BASKET",
+      "isnull": false
+     },
+     {
+      "field": "Q_BASKET",
+      "notin": [
+       "N",
+       "0",
+       ""
+      ]
+     }
+    ]
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "SITE_NAME",
+    "park_name": "SITE_NAME",
+    "court_count": "Q_BASKET",
+    "city": "S_TOWN",
+    "indoor": "outdoor",
+    "public": {
+     "field": "PUBLIC_PRI",
+     "regex_map": [
+      [
+       "^1",
+       "yes"
+      ],
+      [
+       "^2",
+       "no"
+      ]
+     ],
+     "default": "unknown"
+    },
+    "keep_attrs": [
+     "SITE_NAME",
+     "S_TOWN",
+     "PUBLIC_PRI",
+     "Q_BASKET",
+     "TOTALCRTS",
+     "DATE_",
+     "OPERATOR"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "weak",
+   "license": {
+    "name": "CC BY-SA",
+    "url": "https://www.arcgis.com/home/item.html?id=9f1607543b884d4590a0dbeb00deafa5",
+    "quote": "Item licenseInfo (2026-10-17): 'CC BY-SA'. accessInformation: VT Forests Parks and Recreation.",
+    "status": "verified_open"
+   },
+   "attribution": "Vermont Agency of Natural Resources, Department of Forests, Parks and Recreation (CC BY-SA)",
+   "coverage": {
+    "kind": "none",
+    "complete": "statewide public and private recreation sites, surveyed 1994-1997: stale"
+   },
+   "notes": "Added 2026-10-17. Survey dates (DATE_) are 1994-1997, so tier=weak: kept out of official recall. Q_BASKET holds a count ('2') or a flag (Y/X). Share-alike applies to published derivatives only; the truth set is internal."
+  },
+  {
+   "key": "guilford_county_parks",
+   "name": "Guilford County Parks (amenity flags)",
+   "publisher": "Guilford County, North Carolina (GIS)",
+   "city": "Guilford County",
+   "state": "NC",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=ad1c3535abb542c587d55be057cab86d",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services5.arcgis.com/RR1v7NWFfwk98pUn/arcgis/rest/services/Guilford_County_Park_W_Subsets_WFL1/FeatureServer/0",
+    "where": "Basketball_Courts = 1"
+   },
+   "fields": {
+    "source_id": "Park_ID",
+    "name": "Name",
+    "park_name": "Name",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "Name",
+     "Alias_Name",
+     "Basketball_Courts",
+     "Recreation_Center"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "Public domain (county statement)",
+    "url": "https://www.arcgis.com/home/item.html?id=ad1c3535abb542c587d55be057cab86d",
+    "quote": "Item licenseInfo (2026-10-17): 'The data shown in this map is for public use ... This data is considered to be in the public domain.'",
+    "status": "verified_open"
+   },
+   "attribution": "Guilford County, North Carolina",
+   "coverage": {
+    "kind": "none",
+    "complete": "the 21 county-run parks only (not Greensboro or High Point city parks)"
+   },
+   "notes": "Added 2026-10-17. Flag only (0/1), no count; park points."
+  },
+  {
+   "key": "ne_ngpc_parks",
+   "name": "Nebraska Game and Parks: park locations (amenity flags)",
+   "publisher": "Nebraska Game and Parks Commission",
+   "city": "Nebraska (state parks)",
+   "state": "NE",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=d6582e4e96204574b0a31980eded1448",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services5.arcgis.com/IOshH1zLrIieqrNk/arcgis/rest/services/Parks_Locations/FeatureServer/0",
+    "where": "Basketball = 'Yes'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "AreaName",
+    "park_name": "AreaName",
+    "indoor": "unknown",
+    "keep_attrs": [
+     "AreaName",
+     "Basketball"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "No restrictions (publisher statement)",
+    "url": "https://www.arcgis.com/home/item.html?id=d6582e4e96204574b0a31980eded1448",
+    "quote": "Item licenseInfo (2026-10-17): 'There are no restrictions on the use and distribution of data provided in this map or service.'",
+    "status": "verified_open"
+   },
+   "attribution": "Nebraska Game and Parks Commission",
+   "coverage": {
+    "kind": "none",
+    "complete": "state parks and recreation areas only (75 locations)"
+   },
+   "notes": "Added 2026-10-17. Park points of large state areas: only park-level recall makes sense."
+  },
+  {
+   "key": "manteca_parks",
+   "name": "Manteca Parks (amenity flags)",
+   "publisher": "City of Manteca",
+   "city": "Manteca",
+   "state": "CA",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=9fe86eb3601f4605ba6f96edb916686f",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services5.arcgis.com/apvcu8kifKuj4Ua8/arcgis/rest/services/Parks/FeatureServer/15",
+    "where": "BASKETBALL = 'YES'"
+   },
+   "fields": {
+    "source_id": "OBJECTID",
+    "name": "PARK_NAME",
+    "park_name": "PARK_NAME",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "PARK_NAME",
+     "TYPE",
+     "BASKETBALL",
+     "NOTES"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY 4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "quote": "Item licenseInfo (2026-10-17): 'CC BY - Attribution 4.0 International ...'",
+    "status": "verified_open"
+   },
+   "attribution": "City of Manteca",
+   "coverage": {
+    "kind": "park",
+    "complete": "likely for city parks (flag, no count)",
+    "layer": {
+     "kind": "arcgis",
+     "url": "https://services5.arcgis.com/apvcu8kifKuj4Ua8/arcgis/rest/services/Parks/FeatureServer/15",
+     "where": "1=1",
+     "id_field": "OBJECTID",
+     "name_field": "PARK_NAME"
+    },
+    "description": "Manteca park polygons"
+   },
+   "notes": "Added 2026-10-17. Flag only; the point is inside the park polygon."
+  },
+  {
+   "key": "tucker_parks",
+   "name": "Tucker Parks (amenity flags)",
+   "publisher": "City of Tucker, Georgia",
+   "city": "Tucker",
+   "state": "GA",
+   "landing_url": "https://www.arcgis.com/home/item.html?id=428a1fc99bcf423ea57d285fe7067b1b",
+   "api": {
+    "kind": "arcgis",
+    "url": "https://services6.arcgis.com/SoTK00Zs8aX8VVG4/arcgis/rest/services/ParksTucker/FeatureServer/0",
+    "where": "BASKETBALL = 'Yes'"
+   },
+   "fields": {
+    "source_id": "FACILITYID",
+    "name": "NAME",
+    "park_name": "NAME",
+    "indoor": "outdoor",
+    "keep_attrs": [
+     "NAME",
+     "BASKETBALL",
+     "FULLADDR"
+    ]
+   },
+   "precision": "park_point",
+   "public": true,
+   "tier": "official",
+   "license": {
+    "name": "CC BY",
+    "url": "https://www.arcgis.com/home/item.html?id=428a1fc99bcf423ea57d285fe7067b1b",
+    "quote": "Item licenseInfo (2026-10-17): 'CC BY'.",
+    "status": "verified_open"
+   },
+   "attribution": "City of Tucker",
+   "coverage": {
+    "kind": "none",
+    "complete": "city parks (14)"
+   },
+   "notes": "Added 2026-10-17. Flag only."
   }
  ]
 }
