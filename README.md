@@ -11,22 +11,28 @@ Find every basketball court, including the ones that aren't on any map. Hoop Hun
 
 ## Status (October 2026)
 
-- **App:** runs in Expo Go. It has 1,306 courts:
-  - 622 mapped Tennessee courts that pass the privacy policy (home and residents-only courts removed)
-  - 553 NYC Parks courts
-  - 131 new satellite finds in Tennessee, each one at a park, school, church, rec center or college and checked by eye
+- **App:** runs in Expo Go. It loads the courts in the visible map area from the Supabase database, and keeps the newest areas on the phone for offline use. When the server can't be reached it falls back to 1,306 bundled courts (Tennessee and NYC). Reviews and added courts use an anonymous sign-in and wait in a queue while the phone is offline. See [supabase/README.md](supabase/README.md).
+- **Database (Supabase, loaded Oct 17, 2026):** 90,904 courts across the lower 48:
+  - 78,893 OpenStreetMap courts that pass the privacy policy
+  - 552 NYC Parks courts
+  - 11,459 satellite finds, all at a public site: mostly schools and parks, plus churches, rec centers and colleges. They're marked "candidate" until people confirm them.
 - **Detector:** trained on every mapped court in the lower 48 (about 94,000 usable labels from 101,098 OpenStreetMap courts) at 0.6 m per pixel. On Tennessee, which was held out of training, it scores mAP50 0.77.
 - **Nationwide scan (Oct 15–16, 2026):**
   - Scanned every NAIP pixel of the lower 48: 219,198 photo files on 8 rented GPUs, about $157.
   - Found 889,817 possible courts that aren't in OpenStreetMap, 159,140 of them at confidence 0.5 or higher.
-  - After the privacy filter and the second-check model: 5,431 high-precision new public courts, plus 78,893 OpenStreetMap courts that pass the privacy policy. They're exported per state in `pipeline/out/national/app_ready/` (local only) for loading into a database.
+- **Satellite finds, v4 export** (Oct 17, 2026, about $1.63 of GPU):
+  - Each find is re-checked against older NAIP years before export. 11,379 public courts made it, up from 5,431 in the first export.
+  - A blind sample of 100 exports was 96% courts. That number leaves out the 22% of crops that were too unclear to call; counting those as misses, it's 74%.
+  - Details are in [pipeline/docs/imagery.md](pipeline/docs/imagery.md).
 - **Accuracy against official city court lists:**
-  - Finds 87% of official courts of 150 m² or more at a low confidence setting, and 77% at 0.5.
-  - It's weaker on courts OpenStreetMap lacks: 47% at 0.5.
-- **Safety:** every rented GPU machine shuts itself down at a deadline or after 30 idle minutes. See the watchdog section in [pipeline/README.md](pipeline/README.md).
+  - The raw scan finds 87% of official courts of 150 m² or more at a low confidence setting, and 77% at 0.5.
+  - It's weaker on courts OpenStreetMap lacks: 47% at 0.5. The strict export keeps 17% of those large courts, choosing precision over recall.
+  - On 300 random 0.15 km² tiles, the assistant labels found 14 courts. OpenStreetMap had 6 of them, and the scan detected 6 at confidence 0.5. None of the exports fell inside those tiles. The sample is small, so treat these numbers as rough.
+- **Safety:** every rented GPU machine shuts itself down when it stops making progress, or after 30 idle minutes. See the watchdog section in [pipeline/README.md](pipeline/README.md).
 - **Next:**
-  - the nationwide scan
-  - a server database, so the app can load courts for the whole country by map area
+  - park and school websites, plus indoor gyms from public sources (in progress)
+  - Mapillary street-level photos, which need a free Mapillary token
+  - scanning parks and schools again on leaf-off imagery, to find courts hidden under trees
   - hand-labeled accuracy checks using the gold labeling tool
   - light social features
 
