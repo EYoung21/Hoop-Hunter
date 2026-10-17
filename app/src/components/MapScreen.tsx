@@ -4,9 +4,17 @@ import { BackHandler, StyleSheet, View } from 'react-native';
 import MapView, { type LongPressEvent, type MapPressEvent, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { kindsForFilter } from '../data/classify';
+import { HIDDEN_KINDS, kindsForFilter } from '../data/classify';
 import { useCourtData } from '../data/useCourtData';
-import { buildMapItems, INITIAL_REGION, isInRegion, USER_ZOOM_DELTA } from '../data/viewport';
+import { useRemoteCourts } from '../data/useRemoteCourts';
+import {
+  buildMapItems,
+  INITIAL_REGION,
+  isInRegion,
+  type MapItem,
+  serverClusterItem,
+  USER_ZOOM_DELTA,
+} from '../data/viewport';
 import { hasLocationPermission, locateUser } from '../location';
 import { useTheme } from '../theme';
 import type { Court, CourtFilter, LatLng, MapStyle } from '../types';
@@ -30,10 +38,11 @@ export function MapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const lastMarkerPress = useRef(0);
-  const { entries, setReview, addCourt, deleteCourt } = useCourtData();
 
   const [region, setRegion] = useState<Region>(INITIAL_REGION);
   const [filter, setFilter] = useState<CourtFilter>('all');
+  const remote = useRemoteCourts(region, filter);
+  const { entries, setReview, addCourt, deleteCourt } = useCourtData(remote);
   const [showRejected, setShowRejected] = useState(false);
   const [mapStyle, setMapStyle] = useState<MapStyle>('standard');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -54,21 +63,42 @@ export function MapScreen() {
     return entries.filter((entry) => kinds.has(entry.kind));
   }, [entries, filter, showRejected]);
 
-  const inViewCount = useMemo(
-    () => visibleEntries.filter((entry) => isInRegion(entry.court.coordinate, region)).length,
-    [visibleEntries, region],
-  );
+  // Zoomed out with server clusters: draw those, plus your own courts and the open card's court on top.
+  // Otherwise draw the loaded courts, grouped on the phone when there are too many (buildMapItems).
+  const serverClusters = remote.clusters;
+  const mapItems = useMemo<MapItem[]>(() => {
+    if (!serverClusters) return buildMapItems(visibleEntries, region, selectedId);
+    const items: MapItem[] = serverClusters.map(serverClusterItem);
+    for (const entry of visibleEntries) {
+      if (entry.kind === 'mine' || entry.court.id === selectedId) items.push({ type: 'court', entry });
+    }
+    return items;
+  }, [serverClusters, visibleEntries, region, selectedId]);
 
-  const mapItems = useMemo(() => buildMapItems(visibleEntries, region, selectedId), [visibleEntries, region, selectedId]);
+  const inViewCount = useMemo(() => {
+    if (!serverClusters) return visibleEntries.filter((entry) => isInRegion(entry.court.coordinate, region)).length;
+    let count = 0;
+    for (const cluster of serverClusters) {
+      if (isInRegion({ latitude: cluster.latitude, longitude: cluster.longitude }, region)) count += cluster.count;
+    }
+    for (const entry of visibleEntries) {
+      if (entry.kind === 'mine' && isInRegion(entry.court.coordinate, region)) count += 1;
+    }
+    return count;
+  }, [serverClusters, visibleEntries, region]);
 
-  const { pendingCount, rejectedCount } = useMemo(() => {
+  const { pendingCount, rejectedCount, hasIndoor, hasHome } = useMemo(() => {
     let pending = 0;
     let rejected = 0;
+    let indoor = false;
+    let home = false;
     for (const { kind } of entries) {
       if (kind === 'candidate') pending += 1;
-      else if (kind === 'rejected') rejected += 1;
+      else if (HIDDEN_KINDS.includes(kind)) rejected += 1;
+      if (kind === 'indoor') indoor = true;
+      if (kind === 'home') home = true;
     }
-    return { pendingCount: pending, rejectedCount: rejected };
+    return { pendingCount: pending, rejectedCount: rejected, hasIndoor: indoor, hasHome: home };
   }, [entries]);
 
   const selected = useMemo(() => entries.find((entry) => entry.court.id === selectedId) ?? null, [entries, selectedId]);
@@ -187,8 +217,13 @@ export function MapScreen() {
         />
         <View style={[styles.topRow, sidePadding]} pointerEvents="box-none">
           <View style={styles.topLeft} pointerEvents="box-none">
-            <MapStatus inViewCount={inViewCount} placing={placing} onCancelPlacing={() => setPlacing(false)} />
-            {placing ? null : <Legend showRejected={showRejected} />}
+            <MapStatus
+              inViewCount={inViewCount}
+              remoteStatus={remote.status}
+              placing={placing}
+              onCancelPlacing={() => setPlacing(false)}
+            />
+            {placing ? null : <Legend showRejected={showRejected} showIndoor={hasIndoor} showHome={hasHome} />}
           </View>
           <MapControls
             mapStyle={mapStyle}

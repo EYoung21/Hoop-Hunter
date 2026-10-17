@@ -2,6 +2,7 @@ import type { Region } from 'react-native-maps';
 
 import type { LatLng } from '../types';
 import type { CourtEntry } from './classify';
+import type { Bbox, ServerCluster } from './remote';
 
 /**
  * Chattanooga metro, from Signal Mountain in the west to East Brainerd in the east.
@@ -111,6 +112,75 @@ function toCluster(key: string, members: CourtEntry[]): ClusterItem {
       longitude: (minLng + maxLng) / 2,
       latitudeDelta: Math.max((maxLat - minLat) * 1.6, MIN_CLUSTER_DELTA),
       longitudeDelta: Math.max((maxLng - minLng) * 1.6, MIN_CLUSTER_DELTA),
+    },
+  };
+}
+
+// --------------------------------------------------------------------------- server data
+
+/**
+ * Views narrower than this (degrees of longitude, about a metro area) load every court in view
+ * (courts_in_view). Wider views load grid clusters from the server instead (court_clusters), so
+ * the whole country can be browsed without downloading 85,000 courts.
+ */
+export const DETAIL_MAX_DELTA = 0.6;
+
+/** The box a region shows, grown by `margin` of its span on every side. */
+export function regionToBbox(region: Region, margin = 0): Bbox {
+  const halfLat = region.latitudeDelta * (0.5 + margin);
+  const halfLng = region.longitudeDelta * (0.5 + margin);
+  return {
+    west: Math.max(-180, region.longitude - halfLng),
+    south: Math.max(-90, region.latitude - halfLat),
+    east: Math.min(180, region.longitude + halfLng),
+    north: Math.min(90, region.latitude + halfLat),
+  };
+}
+
+export function bboxContains(outer: Bbox, inner: Bbox): boolean {
+  return inner.west >= outer.west && inner.east <= outer.east && inner.south >= outer.south && inner.north <= outer.north;
+}
+
+export function pointInBbox({ latitude, longitude }: LatLng, box: Bbox): boolean {
+  return longitude >= box.west && longitude <= box.east && latitude >= box.south && latitude <= box.north;
+}
+
+/** Web-map zoom level for a region (0 = whole world across the screen). */
+export function zoomForRegion(region: Region): number {
+  const zoom = Math.round(Math.log2(360 / Math.max(region.longitudeDelta, 1e-6)));
+  return Math.min(20, Math.max(0, zoom));
+}
+
+/** Grid cell size the server uses at a zoom (see court_clusters in supabase/migrations). */
+export function clusterCellDegrees(zoom: number): number {
+  return 360 / 2 ** (zoom + 3);
+}
+
+/** Grows a box outward to whole grid cells, so cached clusters line up with fresh ones. */
+export function snapBbox(box: Bbox, cell: number): Bbox {
+  return {
+    west: Math.max(-180, Math.floor(box.west / cell) * cell),
+    south: Math.max(-90, Math.floor(box.south / cell) * cell),
+    east: Math.min(180, Math.ceil(box.east / cell) * cell),
+    north: Math.min(90, Math.ceil(box.north / cell) * cell),
+  };
+}
+
+/** Smallest span a server cluster zooms to; a lone court then shows in its neighbourhood. */
+const MIN_SERVER_CLUSTER_DELTA = 0.02;
+
+export function serverClusterItem(cluster: ServerCluster): ClusterItem {
+  const { west, south, east, north } = cluster.bounds;
+  return {
+    type: 'cluster',
+    key: `srv-${cluster.key}`,
+    count: cluster.count,
+    coordinate: { latitude: cluster.latitude, longitude: cluster.longitude },
+    bounds: {
+      latitude: (south + north) / 2,
+      longitude: (west + east) / 2,
+      latitudeDelta: Math.max((north - south) * 1.6, MIN_SERVER_CLUSTER_DELTA),
+      longitudeDelta: Math.max((east - west) * 1.6, MIN_SERVER_CLUSTER_DELTA),
     },
   };
 }

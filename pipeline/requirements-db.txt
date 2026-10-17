@@ -1,0 +1,3 @@
+# Database loader (hoop_pipeline.db_load): Postgres client for the Supabase backend.
+# Install into the local venv:  .venv\Scripts\python -m pip install -r requirements-db.txt
+psycopg[binary]>=3.2

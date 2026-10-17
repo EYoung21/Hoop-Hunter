@@ -1,7 +1,14 @@
 import rawCourts from '../../assets/data/courts.geojson';
-import type { Court, CourtCollection, CourtFeature, CourtSource, CourtStatus, LatLng } from '../types';
+import {
+  type Court,
+  type CourtCollection,
+  type CourtFeature,
+  type CourtStatus,
+  KNOWN_SOURCES,
+  type KnownCourtSource,
+  type LatLng,
+} from '../types';
 
-const SOURCES: readonly CourtSource[] = ['osm', 'nyc_parks', 'detected', 'user'];
 const STATUSES: readonly CourtStatus[] = ['verified', 'candidate'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -20,25 +27,20 @@ function flag(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
 
-/** Converts one GeoJSON feature into a Court, or returns null if it is malformed. */
-export function featureToCourt(feature: unknown): Court | null {
-  if (!isRecord(feature) || !isRecord(feature.geometry) || !isRecord(feature.properties)) {
-    return null;
-  }
-  const { geometry, properties: p } = feature;
-  if (geometry.type !== 'Point' || !Array.isArray(geometry.coordinates)) return null;
+function knownSource(value: unknown): KnownCourtSource | undefined {
+  return KNOWN_SOURCES.find((s) => s === value);
+}
 
-  const longitude = finite(geometry.coordinates[0]);
-  const latitude = finite(geometry.coordinates[1]);
-  if (latitude === null || longitude === null || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
-    return null;
-  }
+function validCoordinate(longitude: number | null, latitude: number | null): LatLng | null {
+  if (latitude === null || longitude === null || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
 
+/** The fields shared by the GeoJSON file and the server's courts_in_view rows. */
+function toCourt(p: Record<string, unknown>, source: string, coordinate: LatLng): Court | null {
   const id = text(p.id);
-  const source = SOURCES.find((s) => s === p.source);
   const status = STATUSES.find((s) => s === p.status);
-  if (!id || !source || !status) return null;
-
+  if (!id || !status) return null;
   return {
     id,
     name: text(p.name),
@@ -52,9 +54,37 @@ export function featureToCourt(feature: unknown): Court | null {
     region: text(p.region) ?? 'unknown',
     osm_id: text(p.osm_id),
     updated: text(p.updated) ?? '',
+    indoor: flag(p.indoor) ?? false,
+    site: text(p.site),
     notes: text(p.notes),
-    coordinate: { latitude, longitude },
+    coordinate,
   };
+}
+
+/** Converts one GeoJSON feature into a Court, or returns null if it is malformed. */
+export function featureToCourt(feature: unknown): Court | null {
+  if (!isRecord(feature) || !isRecord(feature.geometry) || !isRecord(feature.properties)) {
+    return null;
+  }
+  const { geometry, properties } = feature;
+  if (geometry.type !== 'Point' || !Array.isArray(geometry.coordinates)) return null;
+  const coordinate = validCoordinate(finite(geometry.coordinates[0]), finite(geometry.coordinates[1]));
+  // The bundled file is strict: an unknown source means a bad export.
+  const source = knownSource(properties.source);
+  if (!coordinate || !source) return null;
+  return toCourt(properties, source, coordinate);
+}
+
+/**
+ * Converts a row from the courts_in_view RPC. A source added on the server after this app version
+ * is kept (and labelled generically) so new layers show up without an app update.
+ */
+export function rowToCourt(row: unknown): Court | null {
+  if (!isRecord(row)) return null;
+  const coordinate = validCoordinate(finite(row.lon), finite(row.lat));
+  const source = text(row.source);
+  if (!coordinate || !source) return null;
+  return toCourt(row, source, coordinate);
 }
 
 export function courtToFeature({ coordinate, ...properties }: Court): CourtFeature {
@@ -84,7 +114,10 @@ export function parseCollection(raw: unknown): Court[] {
   return courts;
 }
 
-/** Courts shipped with the app (assets/data/courts.geojson). */
+/**
+ * Courts shipped with the app (assets/data/courts.geojson). Shown where the server has not answered
+ * yet: on first launch before the first fetch, and when offline.
+ */
 export const BUNDLED_COURTS: readonly Court[] = parseCollection(rawCourts);
 
 export interface NewCourtInput {

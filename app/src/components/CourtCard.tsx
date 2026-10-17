@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { type CourtEntry, KIND_LABELS, SOURCE_LABELS } from '../data/classify';
+import { type CourtEntry, KIND_LABELS, siteLabel, sourceLabel } from '../data/classify';
+import { fetchReviewCounts, type ReviewCounts } from '../data/remote';
 import { MARKER_COLORS, type Theme, useTheme } from '../theme';
 import type { LatLng, ReviewDecision } from '../types';
 import { Button } from './Button';
@@ -35,6 +36,39 @@ function capitalize(value: string | null): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, ' ') : 'Unknown';
 }
 
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** What other players said about a candidate (review_counts), or null when unknown / offline / none yet. */
+function useReviewCounts(courtId: string | null, refreshKey: unknown): ReviewCounts | null {
+  const [counts, setCounts] = useState<{ id: string; counts: ReviewCounts } | null>(null);
+  useEffect(() => {
+    if (!courtId) return;
+    let active = true;
+    fetchReviewCounts([courtId])
+      .then((byId) => {
+        if (active) setCounts({ id: courtId, counts: byId[courtId] ?? { court: 0, notCourt: 0, homeCourt: 0, total: 0 } });
+      })
+      .catch(() => {
+        if (active) setCounts(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [courtId, refreshKey]);
+  return counts && counts.id === courtId && counts.counts.total > 0 ? counts.counts : null;
+}
+
+function countsText({ court, notCourt, homeCourt }: ReviewCounts): string {
+  const parts = [
+    court ? `${plural(court, 'player says', 'players say')} it's a court` : null,
+    notCourt ? `${notCourt} not a court` : null,
+    homeCourt ? `${homeCourt} someone's home court` : null,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
 /** Bottom card with a court's details and actions. Slides up when `entry` is set. */
 export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
   const theme = useTheme();
@@ -55,12 +89,16 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
     }
   }, [entry, progress]);
 
+  const reviewable = shown !== null && shown.court.status === 'candidate' && shown.kind !== 'mine';
+  const counts = useReviewCounts(reviewable ? shown.court.id : null, shown?.kind);
+
   if (!shown) return null;
   const { court, kind } = shown;
+  const site = siteLabel(court.site);
   const translateY = progress.interpolate({ inputRange: [0, 1], outputRange: [cardHeight + 24, 0] });
 
   const confirmDelete = () =>
-    Alert.alert('Delete this court?', 'It will be removed from this phone.', [
+    Alert.alert('Delete this court?', 'It will be removed from this phone and from the courts you sent in.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => onDelete(court.id) },
     ]);
@@ -89,7 +127,7 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
           <Text style={[styles.title, { color: theme.text }]} numberOfLines={2}>
             {court.name ?? 'Unnamed court'}
           </Text>
-          <Text style={[styles.subtitle, { color: theme.textMuted }]}>{SOURCE_LABELS[court.source]}</Text>
+          <Text style={[styles.subtitle, { color: theme.textMuted }]}>{sourceLabel(court.source, kind)}</Text>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -121,7 +159,9 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
       </View>
 
       {court.address ? <Detail theme={theme} icon="location-outline" text={court.address} /> : null}
+      {site ? <Detail theme={theme} icon="business-outline" text={site} /> : null}
       {court.notes ? <Detail theme={theme} icon="document-text-outline" text={court.notes} /> : null}
+      {counts ? <Detail theme={theme} icon="people-outline" text={countsText(counts)} /> : null}
 
       {kind === 'candidate' ? (
         <>
@@ -130,12 +170,15 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
             <Button label="It's a court" icon="checkmark" color={theme.success} onPress={() => onReview(court.id, 'confirmed')} />
             <Button label="Not a court" icon="close" variant="danger" onPress={() => onReview(court.id, 'rejected')} />
           </View>
+          <View style={styles.actions}>
+            <Button label="Someone's home court" icon="home-outline" variant="secondary" onPress={() => onReview(court.id, 'home')} />
+          </View>
         </>
       ) : null}
 
       <View style={styles.actions}>
         <Button label="Directions" icon="navigate" variant={kind === 'candidate' ? 'secondary' : 'primary'} onPress={() => openDirections(court.coordinate)} />
-        {kind === 'confirmed' || kind === 'rejected' ? (
+        {kind === 'confirmed' || kind === 'rejected' || kind === 'home' ? (
           <Button label="Undo review" icon="arrow-undo" variant="secondary" onPress={() => onReview(court.id, null)} />
         ) : null}
         {kind === 'mine' ? <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} /> : null}
@@ -164,7 +207,9 @@ function Stat({ theme, label, value }: { theme: Theme; label: string; value: str
   );
 }
 
-function Detail({ theme, icon, text }: { theme: Theme; icon: 'location-outline' | 'document-text-outline'; text: string }) {
+type DetailIcon = 'location-outline' | 'document-text-outline' | 'business-outline' | 'people-outline';
+
+function Detail({ theme, icon, text }: { theme: Theme; icon: DetailIcon; text: string }) {
   return (
     <View style={styles.detail}>
       <Ionicons name={icon} size={18} color={theme.textMuted} />

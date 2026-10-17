@@ -13,7 +13,9 @@ const CENTER = { x: 0.5, y: 0.5 };
 
 const Z_INDEX: Record<CourtKind, number> = {
   rejected: 0,
+  home: 0,
   verified: 1,
+  indoor: 1,
   confirmed: 2,
   candidate: 2,
   mine: 3,

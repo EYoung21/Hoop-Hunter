@@ -1,9 +1,15 @@
 /**
- * Data contract for assets/data/courts.geojson (written by the pipeline) and
- * for courts the user adds on the phone (stored locally in the same shape).
+ * Data contract for assets/data/courts.geojson (written by the pipeline), for courts loaded from
+ * the server (Supabase RPC `courts_in_view`, same fields), and for courts the user adds on the phone.
  */
 
-export type CourtSource = 'osm' | 'nyc_parks' | 'detected' | 'user';
+/** Sources the app knows how to label. Server rows may carry a newer one; see sourceLabel(). */
+export const KNOWN_SOURCES = ['osm', 'nyc_parks', 'detected', 'user', 'overture', 'web', 'indoor', 'nces'] as const;
+
+export type KnownCourtSource = (typeof KNOWN_SOURCES)[number];
+
+/** A known source, or (server data only) a source added after this app version. */
+export type CourtSource = KnownCourtSource | (string & {});
 
 export type CourtStatus = 'verified' | 'candidate';
 
@@ -19,11 +25,15 @@ export interface CourtProperties {
   surface: string | null;
   lit: boolean | null;
   address: string | null;
-  /** "chattanooga" | "nyc" | … ("user" for courts added on the phone). */
+  /** "chattanooga" | "nyc" | "tennessee" | … ("user" for courts added on the phone). */
   region: string;
   osm_id: string | null;
   /** ISO date. */
   updated: string;
+  /** Indoor court (gym, rec center). Optional in the file; false or missing means outdoor. */
+  indoor?: boolean | null;
+  /** What the court sits on, for satellite finds: park, school, college, church, rec, community. */
+  site?: string | null;
   /** Free-text notes. Only courts added on the phone have these; not part of the pipeline file. */
   notes?: string | null;
 }
@@ -53,7 +63,8 @@ export interface Court extends CourtProperties {
   coordinate: LatLng;
 }
 
-export type ReviewDecision = 'confirmed' | 'rejected';
+/** On the phone: confirmed = "It's a court", rejected = "Not a court", home = "Someone's home court". */
+export type ReviewDecision = 'confirmed' | 'rejected' | 'home';
 
 export interface Review {
   decision: ReviewDecision;
@@ -65,7 +76,7 @@ export interface Review {
 export type ReviewMap = Record<string, Review>;
 
 /** How a court is drawn on the map, derived from its data plus the user's reviews. */
-export type CourtKind = 'verified' | 'candidate' | 'confirmed' | 'rejected' | 'mine';
+export type CourtKind = 'verified' | 'indoor' | 'candidate' | 'confirmed' | 'rejected' | 'home' | 'mine';
 
 export type CourtFilter = 'all' | 'verified' | 'candidates' | 'mine';
 

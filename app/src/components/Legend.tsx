@@ -9,11 +9,22 @@ import { MarkerGlyph } from './MarkerGlyph';
 
 const KINDS: readonly CourtKind[] = ['verified', 'candidate', 'confirmed', 'mine'];
 
+interface Props {
+  showRejected: boolean;
+  /** Add the indoor marker to the key (only when indoor courts are loaded). */
+  showIndoor: boolean;
+  /** Add the home-court marker next to "rejected" (only once you marked one). */
+  showHome: boolean;
+}
+
 /** Map key explaining the marker shapes. Tap to collapse or expand. */
-export function Legend({ showRejected }: { showRejected: boolean }) {
+export function Legend({ showRejected, showIndoor, showHome }: Props) {
   const theme = useTheme();
   const [open, setOpen] = useState(true);
-  const kinds: readonly CourtKind[] = showRejected ? [...KINDS, 'rejected'] : KINDS;
+  const kinds: CourtKind[] = [...KINDS];
+  if (showIndoor) kinds.splice(1, 0, 'indoor');
+  if (showRejected) kinds.push('rejected');
+  if (showRejected && showHome) kinds.push('home');
 
   return (
     <Pressable

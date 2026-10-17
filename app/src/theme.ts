@@ -8,9 +8,11 @@ export const ACCENT = '#E0651C';
 export const MARKER_COLORS: Record<CourtKind, string> = {
   verified: ACCENT,
   confirmed: ACCENT,
+  indoor: '#2563EB',
   candidate: '#9B5CF6',
   mine: '#16A34A',
   rejected: '#6B7280',
+  home: '#6B7280',
 };
 
 export interface Theme {

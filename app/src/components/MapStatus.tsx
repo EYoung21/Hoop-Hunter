@@ -1,23 +1,37 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { RemoteStatus } from '../data/useRemoteCourts';
 import { FLOATING_SHADOW, useTheme } from '../theme';
 
 interface Props {
   inViewCount: number;
+  /** Server state: a spinner while loading, a note when showing saved courts offline. */
+  remoteStatus: RemoteStatus;
   placing: boolean;
   onCancelPlacing: () => void;
 }
 
 /** Count of courts in view, plus the "tap to place" hint while adding a court. */
-export function MapStatus({ inViewCount, placing, onCancelPlacing }: Props) {
+export function MapStatus({ inViewCount, remoteStatus, placing, onCancelPlacing }: Props) {
   const theme = useTheme();
   return (
     <View style={styles.column} pointerEvents="box-none">
       <View style={[styles.pill, { backgroundColor: theme.surface }]} accessibilityLiveRegion="polite">
-        <Text style={[styles.count, { color: theme.text }]}>
-          {inViewCount} {inViewCount === 1 ? 'court' : 'courts'} in view
-        </Text>
+        <View style={styles.countRow}>
+          <Text style={[styles.count, { color: theme.text }]}>
+            {inViewCount.toLocaleString('en-US')} {inViewCount === 1 ? 'court' : 'courts'} in view
+          </Text>
+          {remoteStatus === 'loading' ? (
+            <ActivityIndicator size="small" color={theme.accent} accessibilityLabel="Loading courts" />
+          ) : null}
+        </View>
+        {remoteStatus === 'offline' ? (
+          <View style={styles.countRow}>
+            <Ionicons name="cloud-offline-outline" size={13} color={theme.textMuted} />
+            <Text style={[styles.note, { color: theme.textMuted }]}>Offline: showing saved courts</Text>
+          </View>
+        ) : null}
       </View>
       {placing ? (
         <View style={[styles.hint, { backgroundColor: theme.accent }]}>
@@ -42,11 +56,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 14,
+    gap: 2,
     boxShadow: FLOATING_SHADOW,
+  },
+  countRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   count: {
     fontSize: 13,
     fontWeight: '700',
+  },
+  note: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   hint: {
     flexDirection: 'row',

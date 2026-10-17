@@ -8,6 +8,9 @@ const MARKS: Partial<Record<CourtKind, string>> = {
   rejected: '×',
 };
 
+/** Kinds drawn with a small roof: a building (indoor court) or a house (someone's home court). */
+const ROOFED: ReadonlySet<CourtKind> = new Set(['indoor', 'home']);
+
 function glyphStyle(kind: CourtKind, size: number): ViewStyle {
   const outline = Math.max(2, Math.round(size * 0.12));
   const color = MARKER_COLORS[kind];
@@ -23,11 +26,31 @@ function glyphStyle(kind: CourtKind, size: number): ViewStyle {
     case 'mine':
       return { borderRadius: size * 0.28, borderWidth: outline, borderColor: '#FFFFFF', backgroundColor: color };
     case 'rejected':
+    case 'home':
       return { borderRadius: size / 2, borderWidth: outline, borderColor: '#FFFFFF', backgroundColor: color, opacity: 0.8 };
     case 'verified':
     case 'confirmed':
+    case 'indoor':
       return { borderRadius: size / 2, borderWidth: outline, borderColor: '#FFFFFF', backgroundColor: color };
   }
+}
+
+/** A "^" drawn from two borders of a rotated square, so it renders the same on every phone font. */
+function Roof({ size }: { size: number }) {
+  const side = Math.max(5, Math.round(size * 0.32));
+  const stroke = Math.max(2, Math.round(size * 0.1));
+  return (
+    <View
+      style={{
+        width: side,
+        height: side,
+        borderTopWidth: stroke,
+        borderLeftWidth: stroke,
+        borderColor: '#FFFFFF',
+        transform: [{ translateY: side * 0.25 }, { rotate: '45deg' }],
+      }}
+    />
+  );
 }
 
 /** The shape drawn for each kind of court. Shared by map markers and the legend. */
@@ -40,6 +63,7 @@ export function MarkerGlyph({ kind, size }: { kind: CourtKind; size: number }) {
           {mark}
         </Text>
       ) : null}
+      {ROOFED.has(kind) ? <Roof size={size} /> : null}
     </View>
   );
 }
