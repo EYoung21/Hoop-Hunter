@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { type CourtEntry, KIND_LABELS, siteLabel, sourceLabel } from '../data/classify';
+import { type CourtEntry, kindLabel, siteLabel, sourceLabel } from '../data/classify';
 import { fetchReviewCounts, type ReviewCounts } from '../data/remote';
 import { MARKER_COLORS, type Theme, useTheme } from '../theme';
 import type { LatLng, ReviewDecision } from '../types';
@@ -150,8 +150,8 @@ export function CourtCard({ entry, onClose, onReview, onDelete }: Props) {
             color={MARKER_COLORS[kind]}
             text={
               court.confidence !== null
-                ? `${KIND_LABELS[kind]} · ${Math.round(court.confidence * 100)}% confidence`
-                : KIND_LABELS[kind]
+                ? `${kindLabel(court, kind)} · ${Math.round(court.confidence * 100)}% confidence`
+                : kindLabel(court, kind)
             }
           />
         ) : null}

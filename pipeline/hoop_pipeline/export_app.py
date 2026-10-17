@@ -7,7 +7,9 @@ shared schema the Expo app reads:
     region, osm_id, updated
 
 * OSM (target region): id ``osm-<type>-<id>``, status verified, point = element
-  bbox center (what Overpass ``out center`` returns), sorted by element id.
+  bbox center (what Overpass ``out center`` returns), sorted by element id. Courts in an
+  indoor venue (sports centre / hall, gym, community centre, indoor pitch) gain the optional
+  ``indoor: true``; a roofed outdoor court (only ``covered=yes``) stays outdoor.
 * NYC Parks (``assets/NYCcourts.json``): id ``nyc-<Prop_ID>``; repeated Prop_IDs
   get ``-2``, ``-3`` ... in file order; rows without coordinates are skipped.
 * Detected: ``source=detected, status=candidate`` with confidence, only at or
@@ -46,6 +48,7 @@ import numpy as np
 
 from . import config
 from .common import add_common_args, read_json, setup_logging, write_json
+from .osm_tags import indoor_kind
 
 log = logging.getLogger("export_app")
 
@@ -53,7 +56,8 @@ PROPERTY_KEYS = [
     "id", "name", "source", "status", "confidence", "hoops", "surface",
     "lit", "address", "region", "osm_id", "updated",
 ]
-# Optional trailing keys: "site" on detected candidates (privacy.py), "notes" on user courts.
+# Optional trailing keys: "site" on detected candidates (privacy.py), "notes" on user courts,
+# "indoor" (always true when present) on OSM courts in an indoor venue.
 SITE_VALUES = {"park", "school", "college", "church", "rec", "community"}
 EXPORT_CLASSES_DEFAULT = {"public"}
 NEVER_EXPORT = {"private_home", "restricted"}
@@ -80,6 +84,17 @@ def _int_or_none(v: Any) -> int | None:
 
 def _bool_or_none(v: Any) -> bool | None:
     return {"yes": True, "no": False}.get(str(v).strip().lower()) if v is not None else None
+
+
+def osm_indoor(tags: dict[str, Any]) -> bool:
+    """True for a court in an indoor venue. A pitch whose only indoor hint is ``covered=yes`` is a roofed
+    outdoor court, so it stays outdoor."""
+    if indoor_kind(tags) is None:
+        return False
+    roofed_only = (tags.get("leisure") == "pitch" and tags.get("covered") == "yes" and "building" not in tags
+                   and tags.get("indoor") not in ("yes", "room", "area")
+                   and tags.get("location") not in ("indoor", "underground"))
+    return not roofed_only
 
 
 def _label_for(lat: float, lon: float, default: str, sub_regions: list[config.Region]) -> str:
@@ -118,7 +133,7 @@ def osm_features(path: Path, region: str, updated: str,
         p = f["properties"]
         t = p.get("tags", {})
         label = _label_for(p["center_lat"], p["center_lon"], region, sub_regions or [])
-        out.append(_feature(
+        feat = _feature(
             round(p["center_lon"], 6), round(p["center_lat"], 6),
             {
                 "id": f"osm-{p['osm_type']}-{p['osm_id']}",
@@ -134,7 +149,10 @@ def osm_features(path: Path, region: str, updated: str,
                 "osm_id": f"{p['osm_type']}/{p['osm_id']}",
                 "updated": updated,
             },
-        ))
+        )
+        if osm_indoor(t):
+            feat["properties"]["indoor"] = True
+        out.append(feat)
     return out
 
 
@@ -259,9 +277,11 @@ def validate(fc: dict[str, Any]) -> list[str]:
                 errors.append(f"{where}: bad coordinates {c}")
         p = f.get("properties") or {}
         keys = list(p.keys())
-        # user courts may carry the app-only optional "notes" field; detected candidates an optional "site"
+        # user courts may carry the app-only optional "notes" field; detected candidates an optional "site";
+        # OSM courts in an indoor venue "indoor": true
         if keys != PROPERTY_KEYS and not (p.get("source") == "user" and keys == [*PROPERTY_KEYS, "notes"]) \
-                and not (p.get("source") == "detected" and keys == [*PROPERTY_KEYS, "site"]):
+                and not (p.get("source") == "detected" and keys == [*PROPERTY_KEYS, "site"]) \
+                and not (p.get("source") == "osm" and keys == [*PROPERTY_KEYS, "indoor"] and p["indoor"] is True):
             errors.append(f"{where}: property keys {keys} != {PROPERTY_KEYS}")
             continue
         if "site" in p and p["site"] not in SITE_VALUES:

@@ -67,6 +67,12 @@ export const KIND_LABELS: Record<CourtKind, string> = {
   mine: 'Added by you',
 };
 
+/** The status line for a court: unconfirmed courts from a park's web page aren't satellite finds. */
+export function kindLabel(court: Court, kind: CourtKind): string {
+  if (kind === 'candidate' && court.source === 'web') return 'Listed on a park website';
+  return KIND_LABELS[kind];
+}
+
 /** Where a satellite find sits (the pipeline's `site`). */
 const SITE_LABELS: Record<string, string> = {
   park: 'In a park',

@@ -12,10 +12,13 @@ Find every basketball court, including the ones that aren't on any map. Hoop Hun
 ## Status (October 2026)
 
 - **App:** runs in Expo Go. It loads the courts in the visible map area from the Supabase database, and keeps the newest areas on the phone for offline use. When the server can't be reached it falls back to 1,306 bundled courts (Tennessee and NYC). Reviews and added courts use an anonymous sign-in and wait in a queue while the phone is offline. See [supabase/README.md](supabase/README.md).
-- **Database (Supabase, loaded Oct 17, 2026):** 90,904 courts across the lower 48:
-  - 78,893 OpenStreetMap courts that pass the privacy policy
+- **Database (Supabase, loaded Oct 17, 2026):** 92,132 courts across the lower 48:
+  - 78,893 OpenStreetMap courts that pass the privacy policy. 1,406 of them are indoor (sports centers, gyms, halls).
   - 552 NYC Parks courts
   - 11,459 satellite finds, all at a public site: mostly schools and parks, plus churches, rec centers and colleges. They're marked "candidate" until people confirm them.
+  - 727 courts listed on a park's own web page that no map has, also marked "candidate". In a hand check, 74 of 78 were right (95%).
+  - 501 indoor gyms and rec centers listed by OpenStreetMap or a park website. In a hand check, 25 of 26 were right.
+- **Social (live):** check-ins, pickup runs, streaks, XP, badges, follow by friend code, and weekly leaderboards. See [supabase/README.md](supabase/README.md).
 - **Detector:** trained on every mapped court in the lower 48 (about 94,000 usable labels from 101,098 OpenStreetMap courts) at 0.6 m per pixel. On Tennessee, which was held out of training, it scores mAP50 0.77.
 - **Nationwide scan (Oct 15–16, 2026):**
   - Scanned every NAIP pixel of the lower 48: 219,198 photo files on 8 rented GPUs, about $157.
@@ -30,11 +33,10 @@ Find every basketball court, including the ones that aren't on any map. Hoop Hun
   - On 300 random 0.15 km² tiles, the assistant labels found 14 courts. OpenStreetMap had 6 of them, and the scan detected 6 at confidence 0.5. None of the exports fell inside those tiles. The sample is small, so treat these numbers as rough.
 - **Safety:** every rented GPU machine shuts itself down when it stops making progress, or after 30 idle minutes. See the watchdog section in [pipeline/README.md](pipeline/README.md).
 - **Next:**
-  - park and school websites, plus indoor gyms from public sources (in progress)
+  - scanning parks and schools again on leaf-off (winter) imagery, to find courts hidden under trees (in progress)
   - Mapillary street-level photos, which need a free Mapillary token
-  - scanning parks and schools again on leaf-off imagery, to find courts hidden under trees
   - hand-labeled accuracy checks using the gold labeling tool
-  - light social features
+  - trying the app, including the social features, on a phone
 
 ## Quick start
 

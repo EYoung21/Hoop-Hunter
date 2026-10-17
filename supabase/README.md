@@ -25,26 +25,28 @@ pipeline/requirements-db.txt                psycopg 3
 
 ## Loaded data (2026-10-17)
 
-85,470 published courts:
+92,132 published courts (325 more are retired):
 
 | layer (`extra.layer`) | source | courts | from |
 |---|---|---|---|
-| `national` | `osm` | 78,893 | `pipeline/out/national/v3/app_ready/<ST>.geojson` (49 files) |
-| `national` | `detected` | 5,924 | same files (v3 operating point) |
+| `national` | `osm` | 78,893 | `pipeline/out/national/v4/app_ready/<ST>.geojson` (49 files). 1,406 of them are in an indoor venue and carry `indoor: true` (`export_app.osm_indoor`). |
+| `national` | `detected` | 11,379 | same files (v4 multi-year export, `pipeline/docs/imagery.md`) |
+| `web` | `web` | 727 | `pipeline/out/web/web_courts_public.geojson`: parks whose own web page lists a court, placed on a satellite detection or within 150 m of the court (`pipeline/docs/web_sources.md`). Status `candidate`. 38 were within 30 m of a loaded court and skipped. |
+| `indoor` | `osm`, `web` | 187 + 314 | `pipeline/out/indoor/indoor_courts_listed.geojson`, OSM and park-page rows only (`pipeline/docs/indoor.md`). Its Overture rows (74% precision) aren't loaded. |
 | `app_bundle` | `nyc_parks` | 552 | `app/assets/data/courts.geojson` (553 in the file; `nyc-X039` Orchard Beach has a flipped longitude, +73.79, and is skipped) |
-| `app_bundle` | `detected` | 101 | the same file: Tennessee candidates checked by eye that the v3 export doesn't have. 25 more are in v3 under the same id (v3's newer row wins); 5 are within 25 m of a v3 detection of the same court and were skipped. |
+| `app_bundle` | `detected` | 80 | the same file: Tennessee candidates checked by eye that the national export doesn't have |
 
 Per state, published courts (`python -m hoop_pipeline.db_load report`):
 
 ```
-AL    571  AR    590  AZ  3,322  CA 17,889  CO  2,000  CT    875  DC    176  DE    215  FL  5,088  GA    974
-IA    964  ID    614  IL  2,954  IN  1,678  KS    592  KY    834  LA    453  MA  2,035  MD  1,807  ME    405
-MI  2,571  MN  1,838  MO  1,067  MS    243  MT    269  NC  1,412  ND    453  NE    641  NH    335  NJ  2,240
-NM  1,012  NV    999  NY  5,265  OH  3,509  OK    668  OR  1,145  PA  3,856  RI    289  SC    858  SD    313
-TN    785  TX  4,049  UT  1,070  VA  2,031  VT    218  WA  2,112  WI  1,587  WV    344  WY    255
+AL    623  AR    599  AZ  3,461  CA 21,006  CO  2,074  CT    904  DC    180  DE    224  FL  5,548  GA  1,034
+IA    987  ID    623  IL  3,089  IN  1,745  KS    616  KY    898  LA    490  MA  2,130  MD  1,900  ME    439
+MI  2,626  MN  1,889  MO  1,126  MS    251  MT    291  NC  1,482  ND    457  NE    647  NH    358  NJ  2,349
+NM  1,031  NV  1,254  NY  5,477  OH  3,589  OK    700  OR  1,218  PA  4,197  RI    300  SC    909  SD    319
+TN    825  TX  4,288  UT  1,148  VA  2,121  VT    230  WA  2,204  WI  1,649  WV    371  WY    256
 ```
 
-NY includes the 552 NYC Parks courts; TN includes the 101 hand-checked candidates.
+NY includes the 552 NYC Parks courts.
 
 ## Schema
 
@@ -379,18 +381,25 @@ file, then load it with its own layer name:
 * **Anything else** (`url`, `source_name`, `hours`, `phone`, `fee`, …) is kept in `extra` with no schema change. The
   app doesn't read `extra` yet.
 
+What was run on 2026-10-17 (each after a `--dry-run`):
+
 ```bash
-.venv/Scripts/python -m hoop_pipeline.db_load load 'out/web/app_ready/*.geojson' --layer web --skip-near 30 --dry-run
-.venv/Scripts/python -m hoop_pipeline.db_load load out/indoor/indoor_courts.geojson --layer indoor --skip-near 30 --dry-run
+.venv/Scripts/python -m hoop_pipeline.db_load load out/web/web_courts_public.geojson --layer web --skip-near 30
+.venv/Scripts/python -m hoop_pipeline.db_load load out/indoor/indoor_courts_listed.geojson --layer indoor \
+    --only-source osm --only-source web --skip-near 50
 ```
 
-Checked on 2026-10-17 against what `hoop_pipeline/indoor.py` had written so far (not loaded):
+Not loaded, on purpose:
 
-* `out/indoor/indoor_courts.geojson`: 18,032 features (16,459 Overture candidates, 1,573 OSM verified). They all
-  validate, the states come from `region`, and a dry run would insert all 18,032.
-* `out/indoor/indoor_school_gyms.geojson`: 127,952 school gyms, almost all `source: "nces"`. They validate too. School
-  gyms usually aren't open to the public, so decide on the policy before loading them. The `access` property
-  (public / membership / unknown / school) is kept in `extra`.
+* the other 193 rows of `out/web/web_courts.geojson`: courts in large parks, where a park-level pin could be far from
+  the court
+* the 754 Overture rows of `indoor_courts_listed.geojson` (74% precision) and the 14,560 of
+  `out/indoor/indoor_courts.geojson`, which are mostly unverified "likely" gyms. Publishing Overture rows also needs
+  per-row CDLA-Permissive-2.0 attribution.
+* `out/indoor/indoor_school_gyms.geojson`: 128,199 school gyms. School gyms usually aren't open to the public.
+
+The indoor files leave out OSM courts the national layer already has. Those get `indoor: true` from the national
+export instead.
 
 `--skip-near` compares like with like (indoor against indoor, outdoor against outdoor), so a gym next to a park
 court isn't dropped. A new source value, for example `official`, needs a migration that widens
